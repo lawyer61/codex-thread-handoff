@@ -34,6 +34,7 @@ import {
 } from "./thread-state.js";
 
 const USAGE = "Usage: thread-handoff <session-start|user-prompt-submit|post-tool-use|stop|pre-compact|post-compact|doctor --json>\n";
+const NEW_TASK_PROMPT = /(new task|start over|from scratch|do not inherit|新任务|重新开始|从头|不要沿用|不要继承)/i;
 
 function resolveRuntime(stdin, env, source = "resume") {
   const input = parseHookInput(stdin);
@@ -46,10 +47,12 @@ async function handleSessionStart(stdin, env) {
   const input = parseHookInput(stdin);
   const source = input.source || input.hook_source || "startup";
   const config = resolveConfig(env);
+  if (config.mode === "off") return jsonHookOutput({});
+
   const paths = resolveProjectPaths(input, config, env);
   await loadOrCreateThreadState(paths, input, config.keepThreadOnClear && source === "clear" ? "resume" : source);
 
-  if (source === "compact" || source === "resume") {
+  if (config.mode !== "observe" && (source === "compact" || source === "resume")) {
     let brief;
     try {
       brief = await readInjectBrief(paths);
@@ -64,11 +67,14 @@ async function handleSessionStart(stdin, env) {
 
 async function handleUserPromptSubmit(stdin, env) {
   const { input, config, paths } = resolveRuntime(stdin, env, "resume");
-  const state = await loadOrCreateThreadState(paths, input, "resume");
-  await recordUserPrompt(paths, state, input, config);
+  if (config.mode === "off") return jsonHookOutput({});
 
   const prompt = input.prompt || input.user_prompt || "";
-  if (shouldInjectForPrompt(prompt)) {
+  const source = !config.keepThreadOnClear && NEW_TASK_PROMPT.test(prompt) ? "clear" : "resume";
+  const state = await loadOrCreateThreadState(paths, input, source);
+  await recordUserPrompt(paths, state, input, config);
+
+  if (config.mode !== "observe" && shouldInjectForPrompt(prompt)) {
     try {
       return jsonHookOutput(injectionOutput("UserPromptSubmit", await readInjectBrief(paths)));
     } catch {
@@ -81,6 +87,8 @@ async function handleUserPromptSubmit(stdin, env) {
 
 async function handlePostToolUse(stdin, env) {
   const { input, config, paths } = resolveRuntime(stdin, env, "resume");
+  if (config.mode === "off") return jsonHookOutput({});
+
   const state = await loadOrCreateThreadState(paths, input, "resume");
   await recordToolObservation(paths, state, input, config);
   return jsonHookOutput({});
@@ -92,6 +100,10 @@ async function handleStop(stdin, env) {
   }
 
   const { input, config, paths } = resolveRuntime(stdin, env, "resume");
+  if (config.mode === "off" || config.mode === "observe") {
+    return jsonHookOutput({});
+  }
+
   const state = await loadOrCreateThreadState(paths, input, "resume");
 
   if (!config.stopHookContinuation || !isHandoffStale(state, config)) {
@@ -108,6 +120,10 @@ Do not solve new task work. Write a compact but complete handoff for the next co
 
 async function handlePreCompact(stdin, env) {
   const { input, config, paths } = resolveRuntime(stdin, env, "resume");
+  if (config.mode === "off" || config.mode === "observe") {
+    return jsonHookOutput({ continue: true });
+  }
+
   const state = await loadOrCreateThreadState(paths, input, "resume");
 
   let latest;
@@ -152,6 +168,8 @@ async function handlePreCompact(stdin, env) {
 
 async function handlePostCompact(stdin, env) {
   const { input, config, paths } = resolveRuntime(stdin, env, "resume");
+  if (config.mode === "off") return jsonHookOutput({});
+
   const state = await loadOrCreateThreadState(paths, input, "resume");
   const next = advanceContextEpoch(state);
   await saveThreadState(paths, next);

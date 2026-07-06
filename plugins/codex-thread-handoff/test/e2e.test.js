@@ -44,3 +44,53 @@ test("captures prompt, captures tool result, and allows permissive compact", asy
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("off mode does not create thread state from hook traffic", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-off-"));
+
+  try {
+    const result = await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: "/repo",
+      session_id: "session-1",
+      prompt: "continue the parser fix"
+    }), {
+      PLUGIN_DATA: root,
+      THREAD_HANDOFF_MODE: "off"
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, "{}\n");
+    await assert.rejects(() => readdir(join(root, "codex-thread-handoff", "projects")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("new task language starts a new logical thread", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-new-task-"));
+
+  try {
+    const env = { PLUGIN_DATA: root };
+    await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: "/repo",
+      session_id: "session-1",
+      prompt: "continue the parser fix"
+    }), env);
+
+    const projectRoot = join(root, "codex-thread-handoff", "projects");
+    const [projectHash] = await readdir(projectRoot);
+    const projectDir = join(projectRoot, projectHash);
+    const firstThread = (await readFile(join(projectDir, "active_thread"), "utf8")).trim();
+
+    await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: "/repo",
+      session_id: "session-1",
+      prompt: "新任务：不要沿用之前，重新开始"
+    }), env);
+
+    const secondThread = (await readFile(join(projectDir, "active_thread"), "utf8")).trim();
+    assert.notEqual(secondThread, firstThread);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
