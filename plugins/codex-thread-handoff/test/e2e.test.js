@@ -94,3 +94,24 @@ test("new task language starts a new logical thread", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("project-local mode writes storage under repo and protects it with gitignore", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-project-local-"));
+
+  try {
+    const result = await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: root,
+      session_id: "session-1",
+      prompt: "continue the parser fix"
+    }), {
+      THREAD_HANDOFF_PROJECT_LOCAL: "true"
+    });
+
+    assert.equal(result.code, 0);
+    const ignored = await readFile(join(root, ".gitignore"), "utf8");
+    assert.match(ignored, /\.codex\/thread-memory\//);
+    assert.ok((await readdir(join(root, ".codex", "thread-memory", "projects"))).length > 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

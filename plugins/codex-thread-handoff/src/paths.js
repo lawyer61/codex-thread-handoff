@@ -17,6 +17,7 @@ export function resolveProjectPaths(input = {}, config = {}, env = {}) {
 
   return {
     storageRoot,
+    projectLocal: Boolean(config.projectLocal),
     projectHash,
     repoRoot,
     projectDir,

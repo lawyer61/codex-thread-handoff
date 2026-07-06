@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { attachThreadPaths } from "./paths.js";
 import { writeJsonAtomic } from "./json-store.js";
+import { ensureProjectLocalIgnored } from "./project-local.js";
 
 function newLogicalThreadId() {
   const ymd = new Date().toISOString().slice(0, 10).replaceAll("-", "");
@@ -60,6 +61,10 @@ function createState(paths, logicalThreadId, input, source) {
 }
 
 export async function loadOrCreateThreadState(paths, input = {}, source = "startup") {
+  if (paths.projectLocal) {
+    await ensureProjectLocalIgnored(paths.repoRoot);
+  }
+
   await mkdir(paths.projectDir, { recursive: true, mode: 0o700 });
 
   const shouldCreate = source === "clear";
