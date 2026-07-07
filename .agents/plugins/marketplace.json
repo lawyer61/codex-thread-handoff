@@ -1,0 +1,20 @@
+{
+  "name": "thread-handoff",
+  "interface": {
+    "displayName": "Thread Handoff"
+  },
+  "plugins": [
+    {
+      "name": "codex-thread-handoff",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-thread-handoff"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

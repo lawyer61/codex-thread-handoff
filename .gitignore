@@ -1,0 +1,6 @@
+github.env
+codex-home-*/
+.thread-handoff-data/
+node_modules/
+npm-debug.log*
+.DS_Store
