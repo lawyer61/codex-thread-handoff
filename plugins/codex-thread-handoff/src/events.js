@@ -90,6 +90,15 @@ export async function recordCompactBoundary(paths, state, input) {
   });
 }
 
+export async function recordSummaryEvent(paths, state, event) {
+  return appendEvent(paths, {
+    timestamp: new Date().toISOString(),
+    logical_thread_id: state.logical_thread_id,
+    context_epoch: state.context_epoch,
+    ...event
+  });
+}
+
 export async function readEvents(paths) {
   const eventsPath = paths.eventsPath || join(paths.threadDir, "events.jsonl");
   try {
@@ -101,4 +110,9 @@ export async function readEvents(paths) {
   } catch {
     return [];
   }
+}
+
+export async function getLatestEventSeq(paths) {
+  const events = await readEvents(paths);
+  return events.reduce((max, event) => Math.max(max, Number(event.seq || 0)), 0);
 }

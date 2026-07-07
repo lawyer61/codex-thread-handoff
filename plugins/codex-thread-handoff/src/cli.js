@@ -1,8 +1,6 @@
-import { readFile } from "node:fs/promises";
 import { resolveConfig } from "./config.js";
 import { runDoctor } from "./doctor.js";
 import {
-  readEvents,
   recordCompactBoundary,
   recordToolObservation,
   recordUserPrompt
@@ -11,8 +9,6 @@ import {
   isHandoffStale,
   reconcileHandoffFreshness,
   readLatestHandoff,
-  requiredHandoffSections,
-  renderInitialHandoff,
   snapshotHandoff,
   validateHandoff
 } from "./handoff.js";
@@ -32,10 +28,15 @@ import { resolveProjectPaths } from "./paths.js";
 import {
   advanceContextEpoch,
   loadOrCreateThreadState,
+  readThreadState,
   saveThreadState
 } from "./thread-state.js";
+import {
+  runExternalSummarizer,
+  scheduleBackgroundSummarizer
+} from "./summarizer.js";
 
-const USAGE = "Usage: thread-handoff <session-start|user-prompt-submit|post-tool-use|stop|pre-compact|post-compact|doctor --json>\n";
+const USAGE = "Usage: thread-handoff <session-start|user-prompt-submit|post-tool-use|stop|pre-compact|post-compact|summarize --trigger <stop|precompact>|doctor --json>\n";
 const NEW_TASK_PROMPT = /(new task|start over|from scratch|do not inherit|新任务|重新开始|从头|不要沿用|不要继承)/i;
 
 function resolveRuntime(stdin, env, source = "resume") {
@@ -108,10 +109,6 @@ async function handlePostToolUse(stdin, env) {
 }
 
 async function handleStop(stdin, env) {
-  if (env.THREAD_HANDOFF_STOP_HOOK_ACTIVE === "1") {
-    return jsonHookOutput({});
-  }
-
   const { input, config, paths } = resolveRuntime(stdin, env, "resume");
   if (config.mode === "off" || config.mode === "observe") {
     return jsonHookOutput({});
@@ -130,21 +127,11 @@ async function handleStop(stdin, env) {
     // Missing handoff is handled by the stale check below.
   }
 
-  if (!config.stopHookContinuation || !isHandoffStale(state, config)) {
-    return jsonHookOutput({});
+  if (isHandoffStale(state, config)) {
+    await scheduleBackgroundSummarizer(paths, state, input, config, env, "stop");
   }
 
-  const requiredSections = requiredHandoffSections.map((section) => `- ${section}`).join("\n");
-  return jsonHookOutput({
-    decision: "block",
-    reason: `Before continuing the original task, update the thread handoff file at: ${paths.latestPath}
-
-Do not solve new task work. Write a compact but complete handoff for the next context epoch. Use the exact canonical Markdown section headings below so the PreCompact guard can validate the file:
-
-${requiredSections}
-
-Include mission, user constraints, current state, explored files, changed files, commands/results, decisions, validation status, open loops, risks, exact next actions, and ctx search handles for details.`
-  });
+  return jsonHookOutput({});
 }
 
 async function handlePreCompact(stdin, env) {
@@ -154,47 +141,19 @@ async function handlePreCompact(stdin, env) {
   }
 
   let state = await loadOrCreateThreadState(paths, input, "resume");
+  await runExternalSummarizer(paths, state, input, config, env, "precompact", {
+    timeoutMs: config.precompactSummarizerTimeoutMs
+  });
+  state = await readThreadState(paths);
 
   let latest;
   try {
     latest = await readLatestHandoff(paths);
   } catch {
-    if (config.mode === "strict") {
-      return jsonHookOutput({
-        continue: false,
-        stopReason: "No fresh thread handoff exists. Update latest.md before compacting."
-      });
-    }
-
-    const emergency = renderInitialHandoff(state, {
-      project: paths.projectHash,
-      repo_root: paths.repoRoot
-    });
-    await writeTextAtomic(paths.latestPath, emergency);
-    await writeTextAtomic(paths.injectPath, renderInjectBrief(emergency, config));
-    state = {
-      ...state,
-      last_updated_at: new Date().toISOString(),
-      handoff: {
-        ...(state.handoff || {}),
-        latest_path: state.handoff?.latest_path || "latest.md",
-        inject_path: state.handoff?.inject_path || "latest.inject.md",
-        last_model_written_at: new Date().toISOString(),
-        freshness: "fresh"
-      }
-    };
-    await saveThreadState(paths, state);
     return jsonHookOutput({ continue: true });
   }
 
   const validation = validateHandoff(latest);
-  if (!validation.ok && config.mode === "strict") {
-    return jsonHookOutput({
-      continue: false,
-      stopReason: `Thread handoff is missing required sections: ${validation.missingSections.join(", ")}`
-    });
-  }
-
   if (validation.ok) {
     const reconciled = await reconcileHandoffFreshness(paths, state, config);
     state = reconciled.state;
@@ -202,15 +161,10 @@ async function handlePreCompact(stdin, env) {
     await saveThreadState(paths, state);
   }
 
-  if (config.mode === "strict" && isHandoffStale(state, config)) {
-    return jsonHookOutput({
-      continue: false,
-      stopReason: "Thread handoff is stale. Update latest.md before compacting."
-    });
+  if (validation.ok) {
+    await snapshotHandoff(paths);
+    await writeTextAtomic(paths.injectPath, renderInjectBrief(latest, config));
   }
-
-  await snapshotHandoff(paths);
-  await writeTextAtomic(paths.injectPath, renderInjectBrief(latest, config));
   return jsonHookOutput({ continue: true });
 }
 
@@ -230,6 +184,31 @@ async function handlePostCompact(stdin, env) {
     // PostCompact cannot inject through stdout; missing handoff is handled on the next start/prompt.
   }
 
+  return jsonHookOutput({});
+}
+
+async function handleSummarize(argv, stdin, env) {
+  const triggerIndex = argv.indexOf("--trigger");
+  const trigger = triggerIndex >= 0 ? argv[triggerIndex + 1] : "stop";
+  if (!new Set(["stop", "precompact"]).has(trigger)) {
+    return jsonHookOutput({});
+  }
+
+  const { input, config, paths } = resolveRuntime(stdin, env, "resume");
+  if (config.mode === "off" || config.mode === "observe") {
+    return jsonHookOutput({});
+  }
+
+  const state = await loadOrCreateThreadState(paths, input, "resume");
+  let job;
+  try {
+    job = env.THREAD_HANDOFF_SUMMARIZER_JOB_JSON
+      ? JSON.parse(env.THREAD_HANDOFF_SUMMARIZER_JOB_JSON)
+      : undefined;
+  } catch {
+    job = undefined;
+  }
+  await runExternalSummarizer(paths, state, input, config, env, trigger, { job });
   return jsonHookOutput({});
 }
 
@@ -267,6 +246,10 @@ export async function runCli(argv, stdin, env) {
 
     if (command === "post-compact") {
       return { code: 0, stdout: await handlePostCompact(stdin, env), stderr: "" };
+    }
+
+    if (command === "summarize") {
+      return { code: 0, stdout: await handleSummarize(argv, stdin, env), stderr: "" };
     }
 
     return { code: 2, stdout: "", stderr: USAGE };

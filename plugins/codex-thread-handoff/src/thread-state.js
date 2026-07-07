@@ -104,3 +104,7 @@ export function advanceContextEpoch(state) {
 export async function saveThreadState(paths, state) {
   await writeJsonAtomic(paths.statePath, state);
 }
+
+export async function readThreadState(paths) {
+  return JSON.parse(await readFile(paths.statePath, "utf8"));
+}

@@ -18,6 +18,13 @@ test("config defaults match the ADR MVP", () => {
   assert.equal(config.projectLocal, false);
   assert.equal(config.useCtx, true);
   assert.equal(config.redactSecrets, true);
+  assert.equal(config.stopHookContinuation, false);
+  assert.equal(config.summarizerProvider, "openai-compatible");
+  assert.equal(config.summarizerModel, "gpt-5.4");
+  assert.equal(config.summarizerApiKeyEnv, "OPENAI_API_KEY");
+  assert.equal(config.summarizerContextTokens, 200000);
+  assert.equal(config.precompactSummarizerTimeoutMs, 8000);
+  assert.equal(config.transcriptTailBytes, 200000);
 });
 
 test("logical thread id is durable and distinct from codex session id", async () => {

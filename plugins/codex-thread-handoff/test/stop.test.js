@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { runCli } from "../src/cli.js";
-import { requiredHandoffSections, renderInitialHandoff } from "../src/handoff.js";
+import { renderInitialHandoff } from "../src/handoff.js";
 
-test("Stop requests one continuation when the handoff is stale", async () => {
+test("Stop never blocks when the handoff is stale", async () => {
   const root = await mkdtemp(join(tmpdir(), "thread-handoff-stop-"));
 
   try {
@@ -30,20 +30,21 @@ test("Stop requests one continuation when the handoff is stale", async () => {
       cwd: "/repo",
       project_hash_override: "preseed"
     }), {
-      PLUGIN_DATA: root,
-      THREAD_HANDOFF_STOP_HOOK_CONTINUATION: "true"
+      PLUGIN_DATA: root
     });
 
     assert.equal(result.code, 0);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.decision, "block");
-    assert.match(output.reason, /update the thread handoff file/);
+    assert.deepEqual(JSON.parse(result.stdout), {});
+
+    const events = await readFile(join(threadDir, "events.jsonl"), "utf8");
+    assert.match(events, /summary_job_skipped/);
+    assert.match(events, /api_key_missing/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("Stop continuation prompt tells the model to use the canonical handoff schema", async () => {
+test("Stop records a background summarizer job when the API key is configured", async () => {
   const root = await mkdtemp(join(tmpdir(), "thread-handoff-stop-schema-"));
 
   try {
@@ -66,12 +67,17 @@ test("Stop continuation prompt tells the model to use the canonical handoff sche
     const result = await runCli(["stop"], JSON.stringify({
       cwd: "/repo",
       project_hash_override: "preseed"
-    }), { PLUGIN_DATA: root });
+    }), {
+      PLUGIN_DATA: root,
+      OPENAI_API_KEY: "test-key",
+      THREAD_HANDOFF_SUMMARIZER_BASE_URL: "http://127.0.0.1:9/v1",
+      THREAD_HANDOFF_SUMMARIZER_BACKGROUND_SPAWN: "false"
+    });
 
-    const output = JSON.parse(result.stdout);
-    for (const section of requiredHandoffSections) {
-      assert.match(output.reason, new RegExp(section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    }
+    assert.deepEqual(JSON.parse(result.stdout), {});
+    const events = await readFile(join(threadDir, "events.jsonl"), "utf8");
+    assert.match(events, /summary_job_scheduled/);
+    assert.match(events, /"trigger":"stop"/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

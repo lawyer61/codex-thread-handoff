@@ -35,6 +35,13 @@ export async function runDoctor(input = {}, env = {}) {
     hooks: {
       note: "Use /hooks in Codex to review and trust non-managed hook definitions."
     },
+    summarizer: {
+      provider: config.summarizerProvider,
+      model: config.summarizerModel,
+      baseUrl: config.summarizerBaseUrl,
+      apiKeyEnv: config.summarizerApiKeyEnv,
+      apiKeyConfigured: Boolean(env[config.summarizerApiKeyEnv])
+    },
     ctx: {
       enabled: config.useCtx,
       available: await commandExists("ctx", env)
