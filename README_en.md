@@ -37,6 +37,7 @@ Supported providers:
    - Calls `codex exec` as the summarizer.
    - Useful when you want to reuse Codex's configured provider and auth, such as a local `new-api` provider.
    - The plugin does not read `auth.json`; Codex owns authentication.
+   - The child process uses `--skip-git-repo-check` and `--dangerously-bypass-hook-trust`, with `THREAD_HANDOFF_MODE=off`, so it can run from hook/plugin or non-Git directories without recursively triggering this plugin's hooks.
 
 The summarizer must return JSON:
 
@@ -58,11 +59,19 @@ Concurrent writes are protected by summary job ids, trigger priority, and event 
 Install from the GitHub marketplace:
 
 ```bash
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.0
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.2
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
 After installation, restart Codex, open `/hooks` in the TUI, then review and trust the plugin hooks.
+
+To update an older install:
+
+```bash
+codex plugin marketplace remove thread-handoff
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.2
+codex plugin add codex-thread-handoff@thread-handoff
+```
 
 ## Configuration
 
@@ -106,6 +115,8 @@ export THREAD_HANDOFF_PROJECT_LOCAL=true
 
 Project-local mode writes `.codex/thread-memory/` and automatically adds it to `.gitignore`.
 
+If the project root already has `.codex` as a regular file instead of a directory, the plugin falls back to `.thread-handoff/` and adds `.thread-handoff/` to `.gitignore`.
+
 ## Usage
 
 Use Codex normally. The plugin runs through hooks.
@@ -124,6 +135,8 @@ Run diagnostics:
 ```bash
 node plugins/codex-thread-handoff/bin/thread-handoff.js doctor --json </dev/null
 ```
+
+`doctor --json` reports the active storage root, summarizer configuration, and hook diagnostic log paths. Internal hook errors are written to `hook-errors.jsonl`; lifecycle hooks try to return fail-safe JSON instead of leaving Codex with only an unauditable `hook exit with status code 1`.
 
 Local development checks:
 
@@ -146,8 +159,33 @@ python3 /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /w
 - PreCompact always returns `continue:true`.
 - Secret-shaped content is redacted by default.
 - The `codex-cli` provider does not read `auth.json`; it only invokes Codex.
+- The `codex-cli` provider invokes `codex exec --skip-git-repo-check` so the summarizer child can bypass startup checks for non-Git or untrusted work directories.
 - Summarizer input is bounded: `state.json`, existing `latest.md`, recent events, git status/stat/diff, and transcript tail. It does not scan the full repository by default.
 - Handoff is working memory, not source of truth.
+
+## Troubleshooting
+
+### `Not inside a trusted directory and --skip-git-repo-check was not specified`
+
+Older `codex-cli` summarizer versions could hit this when a background hook invoked `codex exec`. Version `v0.3.2` adds `--skip-git-repo-check` to the summarizer child process.
+
+Update with:
+
+```bash
+codex plugin marketplace remove thread-handoff
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.2
+codex plugin add codex-thread-handoff@thread-handoff
+```
+
+After updating, restart Codex and confirm the plugin hooks are trusted in `/hooks`. A background summarizer already started by an older Stop hook may still write the old error briefly; new hook triggers use the updated logic.
+
+### `.codex` is a file and hooks fail
+
+Since `v0.3.1`, project-local mode falls back to `.thread-handoff/` when `.codex` is not a directory, instead of trying to write through `.codex` as a folder.
+
+### Codex only shows `hook exit with status code 1`
+
+Since `v0.3.1`, hook failures try to write `hook-errors.jsonl` and return safe JSON. Run `doctor --json` to find candidate diagnostic paths.
 
 ## Current Limits
 
@@ -155,4 +193,3 @@ python3 /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /w
 - `ctx` is used only as a retrieval-handle direction; the plugin does not query it automatically.
 - The `codex-cli` provider requires local `codex exec`.
 - Background Stop summarization is fire-and-forget; failures are recorded as events but do not affect the active Codex turn.
-

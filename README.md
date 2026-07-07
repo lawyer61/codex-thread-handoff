@@ -37,6 +37,7 @@ Handoff 由外部 summarizer 维护，而不是通过 Stop hook 阻塞当前 Cod
    - 调用 `codex exec` 作为 summarizer。
    - 适合复用 Codex 已配置的 provider 和认证，例如本机 `new-api`。
    - 插件不直接读取 `auth.json`，认证由 Codex 自己处理。
+   - 子进程会使用 `--skip-git-repo-check` 和 `--dangerously-bypass-hook-trust`，并设置 `THREAD_HANDOFF_MODE=off`，避免在 hook / plugin 目录或非 Git 目录中失败，也避免递归触发本插件 hooks。
 
 Summarizer 输出必须是 JSON：
 
@@ -58,11 +59,19 @@ Summarizer 输出必须是 JSON：
 从 GitHub marketplace 安装：
 
 ```bash
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.0
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.2
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
 安装后重启 Codex，在 TUI 中打开 `/hooks`，review 并 trust 插件 hooks。
+
+如果已经安装过旧版：
+
+```bash
+codex plugin marketplace remove thread-handoff
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.2
+codex plugin add codex-thread-handoff@thread-handoff
+```
 
 ## 配置
 
@@ -106,6 +115,8 @@ export THREAD_HANDOFF_PROJECT_LOCAL=true
 
 项目本地模式会写入 `.codex/thread-memory/`，插件会自动把该目录加入 `.gitignore`。
 
+如果项目根目录已经存在 `.codex` 文件而不是目录，插件会自动改用 `.thread-handoff/`，并把 `.thread-handoff/` 加入 `.gitignore`。
+
 ## 使用方式
 
 正常使用 Codex 即可。插件会在 hooks 中自动运行。
@@ -124,6 +135,8 @@ export THREAD_HANDOFF_PROJECT_LOCAL=true
 ```bash
 node plugins/codex-thread-handoff/bin/thread-handoff.js doctor --json </dev/null
 ```
+
+`doctor --json` 会报告当前 storage root、summarizer 配置和 hook 诊断日志路径。hook 内部错误会被写入 `hook-errors.jsonl`；生命周期 hook 会尽量 fail-safe 返回，避免 Codex 只能显示一个不可审计的 `hook exit with status code 1`。
 
 本地开发测试：
 
@@ -146,8 +159,33 @@ python3 /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /w
 - PreCompact 永远返回 `continue:true`。
 - 默认对 secret-shaped 内容脱敏。
 - `codex-cli` provider 不读取 `auth.json`，只调用 Codex。
+- `codex-cli` provider 调用 `codex exec --skip-git-repo-check`，用于绕过 summarizer 子进程在非 Git / 未信任工作目录中的启动检查。
 - Summarizer 输入是有界的：`state.json`、已有 `latest.md`、近期事件、git status/stat/diff、transcript tail；不会默认扫描整个仓库。
 - Handoff 是 working memory，不是 source of truth。
+
+## 故障排查
+
+### `Not inside a trusted directory and --skip-git-repo-check was not specified`
+
+这是旧版 `codex-cli` summarizer 在 hook 后台调用 `codex exec` 时可能出现的错误。`v0.3.2` 已经在 summarizer 子进程中加入 `--skip-git-repo-check`。
+
+处理方式：
+
+```bash
+codex plugin marketplace remove thread-handoff
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.2
+codex plugin add codex-thread-handoff@thread-handoff
+```
+
+更新后重启 Codex，并在 `/hooks` 中确认当前插件 hooks 已被 trust。旧版 Stop hook 已经启动的后台 summarizer 可能还会短暂写出旧错误，新的 hook 触发会使用新版逻辑。
+
+### `.codex` 是文件导致 hook 失败
+
+`v0.3.1` 起，项目本地模式发现 `.codex` 不是目录时会自动使用 `.thread-handoff/`，不再尝试把 `.codex` 当目录写入。
+
+### 只看到 `hook exit with status code 1`
+
+`v0.3.1` 起，hook 失败会尽量写入 `hook-errors.jsonl` 并返回安全 JSON。可以运行 `doctor --json` 查看诊断日志候选路径。
 
 ## 当前限制
 
@@ -155,4 +193,3 @@ python3 /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /w
 - `ctx` 只作为 retrieval handle 方向，不自动查询。
 - `codex-cli` provider 依赖本机 `codex exec` 可用。
 - 后台 Stop summarizer 是 fire-and-forget；失败会写事件，但不影响当前 Codex turn。
-
