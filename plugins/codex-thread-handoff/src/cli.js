@@ -1,3 +1,5 @@
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { resolveConfig } from "./config.js";
 import { runDoctor } from "./doctor.js";
 import {
@@ -25,6 +27,7 @@ import {
 } from "./inject.js";
 import { writeTextAtomic } from "./json-store.js";
 import { resolveProjectPaths } from "./paths.js";
+import { redactSecrets } from "./redaction.js";
 import {
   advanceContextEpoch,
   loadOrCreateThreadState,
@@ -38,12 +41,79 @@ import {
 
 const USAGE = "Usage: thread-handoff <session-start|user-prompt-submit|post-tool-use|stop|pre-compact|post-compact|summarize --trigger <stop|precompact>|doctor --json>\n";
 const NEW_TASK_PROMPT = /(new task|start over|from scratch|do not inherit|新任务|重新开始|从头|不要沿用|不要继承)/i;
+const HOOK_COMMANDS = new Set([
+  "session-start",
+  "user-prompt-submit",
+  "post-tool-use",
+  "stop",
+  "pre-compact",
+  "post-compact",
+  "summarize"
+]);
 
 function resolveRuntime(stdin, env, source = "resume") {
   const input = parseHookInput(stdin);
   const config = resolveConfig(env);
   const paths = resolveProjectPaths(input, config, env);
   return { input, config, paths, source };
+}
+
+function safeHookOutput(command) {
+  return command === "pre-compact"
+    ? jsonHookOutput({ continue: true })
+    : jsonHookOutput({});
+}
+
+function safeParseInput(stdin) {
+  try {
+    return parseHookInput(stdin);
+  } catch {
+    return {};
+  }
+}
+
+function hookErrorLogCandidates(input, env) {
+  const cwd = input.cwd || env.PWD || process.cwd();
+  const candidates = [];
+  if (env.PLUGIN_DATA) {
+    candidates.push(join(env.PLUGIN_DATA, "codex-thread-handoff", "hook-errors.jsonl"));
+  }
+  candidates.push(join(cwd, ".thread-handoff", "hook-errors.jsonl"));
+  candidates.push(join(process.cwd(), ".thread-handoff", "hook-errors.jsonl"));
+  return [...new Set(candidates)];
+}
+
+async function recordHookError(command, error, stdin, env) {
+  const input = safeParseInput(stdin);
+  const rawError = error?.stack || error?.message || String(error);
+  const redacted = redactSecrets(rawError);
+  const entry = {
+    timestamp: new Date().toISOString(),
+    command,
+    cwd: input.cwd || env.PWD || null,
+    session_id: input.session_id || input.codex_session_id || null,
+    hook_event_name: input.hook_event_name || null,
+    source: input.source || input.hook_source || null,
+    trigger: input.trigger || input.compaction_trigger || null,
+    tool: input.tool_name || input.tool || null,
+    error: redacted.text,
+    privacy: {
+      redacted: redacted.redacted,
+      redaction_rules: redacted.rules
+    }
+  };
+
+  for (const path of hookErrorLogCandidates(input, env)) {
+    try {
+      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+      await appendFile(path, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+      return path;
+    } catch {
+      // Try the next candidate. Hook error auditing must not create a new hook failure.
+    }
+  }
+
+  return null;
 }
 
 async function handleSessionStart(stdin, env) {
@@ -254,6 +324,17 @@ export async function runCli(argv, stdin, env) {
 
     return { code: 2, stdout: "", stderr: USAGE };
   } catch (error) {
+    if (HOOK_COMMANDS.has(command)) {
+      const logPath = await recordHookError(command, error, stdin, env);
+      return {
+        code: 0,
+        stdout: safeHookOutput(command),
+        stderr: logPath
+          ? `thread-handoff hook failed; see ${logPath}\n`
+          : "thread-handoff hook failed; diagnostic log unavailable\n"
+      };
+    }
+
     return {
       code: 1,
       stdout: "",

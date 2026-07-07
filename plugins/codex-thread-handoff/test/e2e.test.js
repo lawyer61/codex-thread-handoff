@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -111,6 +111,84 @@ test("project-local mode writes storage under repo and protects it with gitignor
     const ignored = await readFile(join(root, ".gitignore"), "utf8");
     assert.match(ignored, /\.codex\/thread-memory\//);
     assert.ok((await readdir(join(root, ".codex", "thread-memory", "projects"))).length > 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("project-local mode falls back when .codex is already a file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-dot-codex-file-"));
+
+  try {
+    await writeFile(join(root, ".codex"), "created by another tool\n");
+
+    const result = await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: root,
+      session_id: "session-1",
+      prompt: "continue the parser fix"
+    }), {
+      THREAD_HANDOFF_PROJECT_LOCAL: "true"
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const ignored = await readFile(join(root, ".gitignore"), "utf8");
+    assert.match(ignored, /\.thread-handoff\//);
+    assert.ok((await readdir(join(root, ".thread-handoff", "projects"))).length > 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("hook storage failures are fail-safe and auditable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-hook-error-"));
+  const pluginDataFile = join(root, "plugin-data");
+
+  try {
+    await writeFile(pluginDataFile, "not a directory\n");
+
+    const result = await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: root,
+      session_id: "session-1",
+      prompt: "continue the parser fix"
+    }), {
+      PLUGIN_DATA: pluginDataFile
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, "{}\n");
+    assert.match(result.stderr, /thread-handoff hook failed; see /);
+
+    const errors = await readFile(join(root, ".thread-handoff", "hook-errors.jsonl"), "utf8");
+    assert.match(errors, /user-prompt-submit/);
+    assert.match(errors, /ENOTDIR/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PreCompact storage failures still allow compact and write diagnostics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-precompact-error-"));
+  const pluginDataFile = join(root, "plugin-data");
+
+  try {
+    await writeFile(pluginDataFile, "not a directory\n");
+
+    const result = await runCli(["pre-compact"], JSON.stringify({
+      cwd: root,
+      session_id: "session-1",
+      trigger: "manual"
+    }), {
+      PLUGIN_DATA: pluginDataFile
+    });
+
+    assert.equal(result.code, 0);
+    assert.deepEqual(JSON.parse(result.stdout), { continue: true });
+    assert.match(result.stderr, /thread-handoff hook failed; see /);
+
+    const errors = await readFile(join(root, ".thread-handoff", "hook-errors.jsonl"), "utf8");
+    assert.match(errors, /pre-compact/);
+    assert.match(errors, /ENOTDIR/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { resolveConfig } from "./config.js";
+import { resolveProjectPaths } from "./paths.js";
 
 async function exists(path) {
   try {
@@ -21,15 +22,18 @@ async function commandExists(name, env) {
 
 export async function runDoctor(input = {}, env = {}) {
   const config = resolveConfig(env);
-  const storageRoot = config.projectLocal
-    ? join(input.cwd || env.PWD || process.cwd(), ".codex", "thread-memory")
-    : join(env.PLUGIN_DATA || join(process.cwd(), ".thread-handoff-data"), "codex-thread-handoff");
+  const paths = resolveProjectPaths(input, config, env);
+  const projectHookErrorPath = join(input.cwd || env.PWD || process.cwd(), ".thread-handoff", "hook-errors.jsonl");
+  const hookErrorPaths = [
+    join(paths.storageRoot, "hook-errors.jsonl"),
+    projectHookErrorPath
+  ];
 
   return {
     ok: true,
     config,
     storage: {
-      root: storageRoot,
+      root: paths.storageRoot,
       projectLocal: config.projectLocal
     },
     hooks: {
@@ -48,6 +52,9 @@ export async function runDoctor(input = {}, env = {}) {
     },
     redaction: {
       enabled: config.redactSecrets
+    },
+    diagnostics: {
+      hookErrorPaths: [...new Set(hookErrorPaths)]
     }
   };
 }
