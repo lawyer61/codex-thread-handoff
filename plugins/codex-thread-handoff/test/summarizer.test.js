@@ -198,6 +198,7 @@ writeFileSync(args[outputIndex + 1], JSON.stringify({
     assert.equal(invocation.threadHandoffMode, "off");
     assert.equal(invocation.apiKey, null);
     assert.ok(invocation.args.includes("exec"));
+    assert.ok(invocation.args.includes("--skip-git-repo-check"));
     assert.ok(invocation.args.includes("-m"));
     assert.ok(invocation.args.includes("gpt-5.4"));
     assert.ok(invocation.args.includes('model_provider="new-api"'));

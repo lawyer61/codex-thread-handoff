@@ -260,6 +260,7 @@ export async function callCodexCliSummarizer(pkg, config, env, options = {}) {
 
     const args = [
       "exec",
+      "--skip-git-repo-check",
       "--dangerously-bypass-hook-trust",
       "--ignore-rules",
       "--cd",
