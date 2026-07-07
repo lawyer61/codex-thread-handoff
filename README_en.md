@@ -1,5 +1,7 @@
 # Codex Thread Handoff
 
+[中文](README.md)
+
 Codex Thread Handoff is a Codex plugin that keeps a readable, auditable, injectable handoff document for long-running coding tasks across context compaction and resume.
 
 The problem is simple: after Codex works for a long time, context may be compacted. The next context epoch can lose early user constraints, explored files, failed attempts, current change state, test results, and next steps. This plugin turns that working state into `latest.md` and `latest.inject.md`, so Codex can continue without rediscovering everything from scratch.
@@ -8,7 +10,7 @@ The problem is simple: after Codex works for a long time, context may be compact
 
 The plugin uses Codex lifecycle hooks:
 
-- `SessionStart`: injects an existing handoff brief after compact/resume.
+- `SessionStart`: injects an existing handoff brief after compact by default; resume injection is opt-in.
 - `UserPromptSubmit`: records new user requirements and injects context when the prompt depends on prior work.
 - `PostToolUse`: records tool calls and result summaries.
 - `Stop`: never blocks the active Codex flow; it only schedules a background summarizer when needed.
@@ -59,7 +61,7 @@ Concurrent writes are protected by summary job ids, trigger priority, and event 
 Install from the GitHub marketplace:
 
 ```bash
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.2
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.3
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -69,7 +71,7 @@ To update an older install:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.2
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.3
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -98,6 +100,7 @@ Common settings:
 ```bash
 export THREAD_HANDOFF_MODE=strict
 export THREAD_HANDOFF_INJECT_BUDGET_TOKENS=6000
+export THREAD_HANDOFF_INJECT_ON_RESUME=false
 export THREAD_HANDOFF_STALE_AFTER_MINUTES=30
 export THREAD_HANDOFF_SUMMARIZER_TIMEOUT_MS=8000
 export THREAD_HANDOFF_PRECOMPACT_SUMMARIZER_TIMEOUT_MS=8000
@@ -127,8 +130,14 @@ Typical flow:
 2. The plugin records user prompts and tool observations.
 3. At turn end, the Stop hook schedules a background summarizer.
 4. The summarizer updates `latest.md` and `latest.inject.md`.
-5. After compact/resume, SessionStart injects a bounded handoff.
+5. After compact, SessionStart injects a bounded handoff.
 6. When the user says "continue" or refers to prior work, UserPromptSubmit may inject the handoff too.
+
+By default, `SessionStart(source=resume)` does not inject the handoff, so reopening an old Codex session does not automatically pull in prior working state. To inject on resume too:
+
+```bash
+export THREAD_HANDOFF_INJECT_ON_RESUME=true
+```
 
 Run diagnostics:
 
@@ -167,13 +176,13 @@ python3 /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /w
 
 ### `Not inside a trusted directory and --skip-git-repo-check was not specified`
 
-Older `codex-cli` summarizer versions could hit this when a background hook invoked `codex exec`. Version `v0.3.2` adds `--skip-git-repo-check` to the summarizer child process.
+Older `codex-cli` summarizer versions could hit this when a background hook invoked `codex exec`. Since `v0.3.2`, the summarizer child process passes `--skip-git-repo-check`.
 
 Update with:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.2
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.3
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 

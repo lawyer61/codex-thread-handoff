@@ -125,7 +125,8 @@ async function handleSessionStart(stdin, env) {
   const paths = resolveProjectPaths(input, config, env);
   let state = await loadOrCreateThreadState(paths, input, config.keepThreadOnClear && source === "clear" ? "resume" : source);
 
-  if (config.mode !== "observe" && (source === "compact" || source === "resume")) {
+  const shouldInject = source === "compact" || (source === "resume" && config.injectOnResume);
+  if (config.mode !== "observe" && shouldInject) {
     let brief;
     try {
       brief = await readInjectBrief(paths);
