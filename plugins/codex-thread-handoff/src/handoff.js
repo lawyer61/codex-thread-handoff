@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 export const requiredHandoffSections = [
@@ -115,6 +115,38 @@ export function isHandoffStale(state, config, now = new Date()) {
   if (Number.isNaN(writtenAt.getTime())) return true;
   const ageMs = now.getTime() - writtenAt.getTime();
   return ageMs > config.handoffStaleAfterMinutes * 60 * 1000;
+}
+
+export async function reconcileHandoffFreshness(paths, state, config, now = new Date()) {
+  const latestPath = paths.latestPath || join(paths.threadDir, "latest.md");
+  const latest = await readLatestHandoff(paths);
+  const validation = validateHandoff(latest);
+
+  if (!validation.ok) {
+    return { state, latest, validation, fresh: false };
+  }
+
+  const info = await stat(latestPath);
+  const modifiedAt = info.mtime;
+  const ageMs = now.getTime() - modifiedAt.getTime();
+  const fresh = ageMs <= config.handoffStaleAfterMinutes * 60 * 1000;
+
+  return {
+    state: {
+      ...state,
+      last_updated_at: now.toISOString(),
+      handoff: {
+        ...(state.handoff || {}),
+        latest_path: state.handoff?.latest_path || "latest.md",
+        inject_path: state.handoff?.inject_path || "latest.inject.md",
+        last_model_written_at: modifiedAt.toISOString(),
+        freshness: fresh ? "fresh" : "stale"
+      }
+    },
+    latest,
+    validation,
+    fresh
+  };
 }
 
 export async function readLatestHandoff(paths) {

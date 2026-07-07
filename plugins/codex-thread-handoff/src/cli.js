@@ -9,7 +9,9 @@ import {
 } from "./events.js";
 import {
   isHandoffStale,
+  reconcileHandoffFreshness,
   readLatestHandoff,
+  requiredHandoffSections,
   renderInitialHandoff,
   snapshotHandoff,
   validateHandoff
@@ -50,14 +52,25 @@ async function handleSessionStart(stdin, env) {
   if (config.mode === "off") return jsonHookOutput({});
 
   const paths = resolveProjectPaths(input, config, env);
-  await loadOrCreateThreadState(paths, input, config.keepThreadOnClear && source === "clear" ? "resume" : source);
+  let state = await loadOrCreateThreadState(paths, input, config.keepThreadOnClear && source === "clear" ? "resume" : source);
 
   if (config.mode !== "observe" && (source === "compact" || source === "resume")) {
     let brief;
     try {
       brief = await readInjectBrief(paths);
     } catch {
-      brief = "<THREAD_HANDOFF_MEMORY>\nNo fresh handoff brief exists. Rebuild latest.md before relying on history.\n</THREAD_HANDOFF_MEMORY>\n";
+      try {
+        const reconciled = await reconcileHandoffFreshness(paths, state, config);
+        if (!reconciled.validation.ok || !reconciled.fresh) {
+          throw new Error("No fresh valid handoff brief exists");
+        }
+        state = reconciled.state;
+        await saveThreadState(paths, state);
+        brief = renderInjectBrief(reconciled.latest, config);
+        await writeTextAtomic(paths.injectPath, brief);
+      } catch {
+        brief = "<THREAD_HANDOFF_MEMORY>\nNo fresh handoff brief exists. Rebuild latest.md before relying on history.\n</THREAD_HANDOFF_MEMORY>\n";
+      }
     }
     return jsonHookOutput(additionalContextOutput("SessionStart", brief));
   }
@@ -104,17 +117,33 @@ async function handleStop(stdin, env) {
     return jsonHookOutput({});
   }
 
-  const state = await loadOrCreateThreadState(paths, input, "resume");
+  let state = await loadOrCreateThreadState(paths, input, "resume");
+
+  try {
+    const reconciled = await reconcileHandoffFreshness(paths, state, config);
+    state = reconciled.state;
+    await saveThreadState(paths, state);
+    if (reconciled.fresh) {
+      await writeTextAtomic(paths.injectPath, renderInjectBrief(reconciled.latest, config));
+    }
+  } catch {
+    // Missing handoff is handled by the stale check below.
+  }
 
   if (!config.stopHookContinuation || !isHandoffStale(state, config)) {
     return jsonHookOutput({});
   }
 
+  const requiredSections = requiredHandoffSections.map((section) => `- ${section}`).join("\n");
   return jsonHookOutput({
     decision: "block",
     reason: `Before continuing the original task, update the thread handoff file at: ${paths.latestPath}
 
-Do not solve new task work. Write a compact but complete handoff for the next context epoch. Include mission, user constraints, current state, explored files, changed files, commands/results, decisions, validation status, open loops, risks, exact next actions, and ctx search handles for details.`
+Do not solve new task work. Write a compact but complete handoff for the next context epoch. Use the exact canonical Markdown section headings below so the PreCompact guard can validate the file:
+
+${requiredSections}
+
+Include mission, user constraints, current state, explored files, changed files, commands/results, decisions, validation status, open loops, risks, exact next actions, and ctx search handles for details.`
   });
 }
 
@@ -124,7 +153,7 @@ async function handlePreCompact(stdin, env) {
     return jsonHookOutput({ continue: true });
   }
 
-  const state = await loadOrCreateThreadState(paths, input, "resume");
+  let state = await loadOrCreateThreadState(paths, input, "resume");
 
   let latest;
   try {
@@ -143,6 +172,18 @@ async function handlePreCompact(stdin, env) {
     });
     await writeTextAtomic(paths.latestPath, emergency);
     await writeTextAtomic(paths.injectPath, renderInjectBrief(emergency, config));
+    state = {
+      ...state,
+      last_updated_at: new Date().toISOString(),
+      handoff: {
+        ...(state.handoff || {}),
+        latest_path: state.handoff?.latest_path || "latest.md",
+        inject_path: state.handoff?.inject_path || "latest.inject.md",
+        last_model_written_at: new Date().toISOString(),
+        freshness: "fresh"
+      }
+    };
+    await saveThreadState(paths, state);
     return jsonHookOutput({ continue: true });
   }
 
@@ -152,6 +193,13 @@ async function handlePreCompact(stdin, env) {
       continue: false,
       stopReason: `Thread handoff is missing required sections: ${validation.missingSections.join(", ")}`
     });
+  }
+
+  if (validation.ok) {
+    const reconciled = await reconcileHandoffFreshness(paths, state, config);
+    state = reconciled.state;
+    latest = reconciled.latest;
+    await saveThreadState(paths, state);
   }
 
   if (config.mode === "strict" && isHandoffStale(state, config)) {

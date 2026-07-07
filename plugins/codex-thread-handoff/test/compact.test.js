@@ -71,6 +71,53 @@ test("PreCompact writes a snapshot and allows fresh handoff", async () => {
   }
 });
 
+test("PreCompact accepts a valid handoff file when freshness metadata was not updated yet", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-precompact-filefresh-"));
+
+  try {
+    const projectDir = join(root, "codex-thread-handoff", "projects", "preseed");
+    const threadDir = join(projectDir, "threads", "lt_test");
+    await mkdir(threadDir, { recursive: true });
+    await writeFile(join(projectDir, "active_thread"), "lt_test\n");
+    await writeFile(join(threadDir, "state.json"), JSON.stringify({
+      schema_version: 1,
+      logical_thread_id: "lt_test",
+      project_hash: "preseed",
+      repo_root: "/repo",
+      context_epoch: 1,
+      handoff: {
+        latest_path: "latest.md",
+        inject_path: "latest.inject.md",
+        last_model_written_at: null,
+        last_event_seq: 0,
+        freshness: "missing"
+      }
+    }));
+    await writeFile(join(threadDir, "latest.md"), renderInitialHandoff({
+      logical_thread_id: "lt_test",
+      context_epoch: 1
+    }, {
+      project: "example",
+      repo_root: "/repo"
+    }));
+
+    const result = await runCli(["pre-compact"], JSON.stringify({
+      cwd: "/repo",
+      project_hash_override: "preseed"
+    }), {
+      PLUGIN_DATA: root,
+      THREAD_HANDOFF_MODE: "strict"
+    });
+
+    assert.deepEqual(JSON.parse(result.stdout), { continue: true });
+    const state = JSON.parse(await readFile(join(threadDir, "state.json"), "utf8"));
+    assert.equal(state.handoff.freshness, "fresh");
+    assert.equal(typeof state.handoff.last_model_written_at, "string");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("PostCompact advances the context epoch and records a boundary", async () => {
   const root = await mkdtemp(join(tmpdir(), "thread-handoff-postcompact-"));
 
