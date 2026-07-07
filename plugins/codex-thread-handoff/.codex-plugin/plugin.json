@@ -1,6 +1,6 @@
 {
   "name": "codex-thread-handoff",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Logical-thread handoff memory for Codex compaction and resume.",
   "author": {
     "name": "lawyer61"

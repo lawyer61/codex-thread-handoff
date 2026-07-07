@@ -24,6 +24,7 @@ test("config defaults match the ADR MVP", () => {
   assert.equal(config.summarizerApiKeyEnv, "OPENAI_API_KEY");
   assert.equal(config.summarizerContextTokens, 200000);
   assert.equal(config.precompactSummarizerTimeoutMs, 8000);
+  assert.equal(config.summarizerCodexReasoningEffort, "low");
   assert.equal(config.transcriptTailBytes, 200000);
 });
 

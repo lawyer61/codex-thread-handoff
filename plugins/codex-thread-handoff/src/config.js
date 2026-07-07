@@ -37,6 +37,9 @@ export function resolveConfig(env = {}) {
       env.THREAD_HANDOFF_PRECOMPACT_SUMMARIZER_TIMEOUT_MS,
       summarizerTimeoutMs
     ),
+    summarizerCodexBin: env.THREAD_HANDOFF_SUMMARIZER_CODEX_BIN || "codex",
+    summarizerCodexModelProvider: env.THREAD_HANDOFF_SUMMARIZER_CODEX_MODEL_PROVIDER || "",
+    summarizerCodexReasoningEffort: env.THREAD_HANDOFF_SUMMARIZER_CODEX_REASONING_EFFORT || "low",
     transcriptTailBytes: numberFromEnv(env.THREAD_HANDOFF_TRANSCRIPT_TAIL_BYTES, 200000),
     summarizerRecentEvents: numberFromEnv(env.THREAD_HANDOFF_SUMMARIZER_RECENT_EVENTS, 200),
     summarizerBackgroundSpawn: booleanFromEnv(env.THREAD_HANDOFF_SUMMARIZER_BACKGROUND_SPAWN, true)

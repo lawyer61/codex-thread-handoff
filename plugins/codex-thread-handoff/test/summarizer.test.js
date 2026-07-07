@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { renderInitialHandoff } from "../src/handoff.js";
-import { applySummarizerOutput } from "../src/summarizer.js";
+import { applySummarizerOutput, runExternalSummarizer } from "../src/summarizer.js";
 
 function validHandoff(marker) {
   return `${renderInitialHandoff({
@@ -120,6 +120,88 @@ test("the first Stop summarizer result can write even when no source events exis
 
     assert.deepEqual(result, { written: true, source_event_seq: 0 });
     assert.match(await readFile(paths.latestPath, "utf8"), /First Stop result/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("codex-cli provider uses Codex as the credential-owning summarizer", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-codex-provider-"));
+
+  try {
+    const paths = await seed(root, validHandoff("Before Codex provider"));
+    await writeFile(paths.statePath, JSON.stringify({
+      schema_version: 1,
+      logical_thread_id: "lt_test",
+      project_hash: "preseed",
+      repo_root: "/repo",
+      context_epoch: 1,
+      handoff: {
+        latest_path: "latest.md",
+        inject_path: "latest.inject.md",
+        last_model_written_at: null,
+        last_event_seq: 0,
+        freshness: "missing"
+      }
+    }));
+    await writeFile(paths.eventsPath, `${JSON.stringify({
+      seq: 3,
+      type: "user_prompt",
+      timestamp: "2026-07-07T00:00:00.000Z",
+      prompt_summary: "verify codex provider"
+    })}\n`);
+
+    const bin = join(root, "mock-codex.js");
+    const argsPath = join(root, "codex-args.json");
+    await writeFile(bin, `#!/usr/bin/env node
+const { writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+const outputIndex = args.indexOf("--output-last-message");
+if (outputIndex < 0) process.exit(2);
+writeFileSync("${argsPath}", JSON.stringify({
+  args,
+  threadHandoffMode: process.env.THREAD_HANDOFF_MODE,
+  apiKey: process.env.OPENAI_API_KEY || null
+}));
+writeFileSync(args[outputIndex + 1], JSON.stringify({
+  latest_md: ${JSON.stringify(validHandoff("Written by Codex CLI provider"))},
+  confidence: "high",
+  source_event_seq: 3,
+  warnings: []
+}));
+`);
+    await chmod(bin, 0o700);
+
+    const result = await runExternalSummarizer(paths, {
+      logical_thread_id: "lt_test",
+      context_epoch: 1
+    }, {
+      cwd: "/repo"
+    }, {
+      summarizerProvider: "codex-cli",
+      summarizerModel: "gpt-5.4",
+      summarizerCodexBin: bin,
+      summarizerCodexModelProvider: "new-api",
+      summarizerCodexReasoningEffort: "low",
+      summarizerTimeoutMs: 8000,
+      summarizerContextTokens: 200000,
+      summarizerRecentEvents: 200,
+      transcriptTailBytes: 200000,
+      redactSecrets: true,
+      injectBudgetTokens: 6000
+    }, {}, "precompact");
+
+    assert.equal(result.ok, true);
+    assert.match(await readFile(paths.latestPath, "utf8"), /Written by Codex CLI provider/);
+
+    const invocation = JSON.parse(await readFile(argsPath, "utf8"));
+    assert.equal(invocation.threadHandoffMode, "off");
+    assert.equal(invocation.apiKey, null);
+    assert.ok(invocation.args.includes("exec"));
+    assert.ok(invocation.args.includes("-m"));
+    assert.ok(invocation.args.includes("gpt-5.4"));
+    assert.ok(invocation.args.includes('model_provider="new-api"'));
+    assert.ok(invocation.args.includes('model_reasoning_effort="low"'));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
