@@ -1,6 +1,6 @@
 {
   "name": "codex-thread-handoff",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Logical-thread handoff memory for Codex compaction and resume.",
   "author": {
     "name": "lawyer61"
@@ -8,7 +8,7 @@
   "interface": {
     "displayName": "Codex Thread Handoff",
     "shortDescription": "Maintain compact-safe task handoffs.",
-    "longDescription": "Codex Thread Handoff records local logical-thread events and injects bounded handoff briefs after compaction or resume.",
+    "longDescription": "Codex Thread Handoff records local logical-thread events and uses an external summarizer to maintain bounded handoff briefs after compaction or resume.",
     "developerName": "lawyer61",
     "category": "Productivity",
     "capabilities": [
