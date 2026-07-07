@@ -61,7 +61,7 @@ Concurrent writes are protected by summary job ids, trigger priority, and event 
 Install from the GitHub marketplace:
 
 ```bash
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.3
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -71,7 +71,7 @@ To update an older install:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.3
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -182,7 +182,7 @@ Update with:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.3
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -191,6 +191,18 @@ After updating, restart Codex and confirm the plugin hooks are trusted in `/hook
 ### `.codex` is a file and hooks fail
 
 Since `v0.3.1`, project-local mode falls back to `.thread-handoff/` when `.codex` is not a directory, instead of trying to write through `.codex` as a folder.
+
+### Many `PostToolUse hook exited with code 1` errors after a long run
+
+Older versions could fail when two clients or dense tool activity wrote `state.json` / `events.jsonl` concurrently. The lock implementation returned `EEXIST` immediately, and `state.json` also grew over time because the same Codex session was recorded repeatedly, making lock contention worse. Since `v0.3.4`, locks wait briefly and retry, temporary file names are globally unique, and a Codex session is recorded only once.
+
+Update with:
+
+```bash
+codex plugin marketplace remove thread-handoff
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
+codex plugin add codex-thread-handoff@thread-handoff
+```
 
 ### Codex only shows `hook exit with status code 1`
 

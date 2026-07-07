@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
 import { loadThreadHandoffIgnore } from "../src/ignore.js";
 import { appendJsonl, writeJsonAtomic } from "../src/json-store.js";
+import { withLock } from "../src/lock.js";
 import { redactSecrets } from "../src/redaction.js";
 
 test("appendJsonl writes one JSON object per line", async () => {
@@ -36,6 +38,26 @@ test("writeJsonAtomic replaces a JSON file", async () => {
     await writeJsonAtomic(file, { value: 2 });
 
     assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { value: 2 });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("withLock waits for an active lock to clear", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-lock-wait-"));
+
+  try {
+    const lockDir = join(root, "state.json.lock");
+    await mkdir(lockDir);
+
+    const release = sleep(20).then(() => rm(lockDir, { recursive: true, force: true }));
+    const result = await withLock(lockDir, async () => "acquired", {
+      retryDelayMs: 5,
+      waitTimeoutMs: 500
+    });
+    await release;
+
+    assert.equal(result, "acquired");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

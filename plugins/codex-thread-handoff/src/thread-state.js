@@ -18,6 +18,15 @@ function sessionRecord(input, source) {
   };
 }
 
+function withSessionRecord(state, input, source) {
+  const nextRecord = sessionRecord(input, source);
+  const existing = state.codex_sessions || [];
+  if (existing.some((record) => record.session_id === nextRecord.session_id)) {
+    return existing;
+  }
+  return [...existing, nextRecord];
+}
+
 async function readActiveThread(paths) {
   try {
     const value = (await readFile(paths.activeThreadPath, "utf8")).trim();
@@ -80,10 +89,7 @@ export async function loadOrCreateThreadState(paths, input = {}, source = "start
     state = {
       ...state,
       last_updated_at: new Date().toISOString(),
-      codex_sessions: [
-        ...(state.codex_sessions || []),
-        sessionRecord(input, source)
-      ]
+      codex_sessions: withSessionRecord(state, input, source)
     };
   }
 

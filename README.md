@@ -61,7 +61,7 @@ Summarizer 输出必须是 JSON：
 从 GitHub marketplace 安装：
 
 ```bash
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.3
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -71,7 +71,7 @@ codex plugin add codex-thread-handoff@thread-handoff
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.3
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -182,7 +182,7 @@ python3 /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /w
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.3
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -191,6 +191,18 @@ codex plugin add codex-thread-handoff@thread-handoff
 ### `.codex` 是文件导致 hook 失败
 
 `v0.3.1` 起，项目本地模式发现 `.codex` 不是目录时会自动使用 `.thread-handoff/`，不再尝试把 `.codex` 当目录写入。
+
+### 长时间运行后出现大量 `PostToolUse hook exited with code 1`
+
+旧版在多个客户端或密集工具调用同时写 `state.json` / `events.jsonl` 时，文件锁会直接报 `EEXIST`，并且 `state.json` 会因为重复记录同一个 Codex session 而逐渐膨胀，进一步放大锁竞争。`v0.3.4` 起，锁会等待短时间后重试，临时文件名也改为全局唯一，并且同一个 Codex session 不会反复写入 `codex_sessions`。
+
+处理方式：
+
+```bash
+codex plugin marketplace remove thread-handoff
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
+codex plugin add codex-thread-handoff@thread-handoff
+```
 
 ### 只看到 `hook exit with status code 1`
 

@@ -70,6 +70,25 @@ test("logical thread id is durable and distinct from codex session id", async ()
   }
 });
 
+test("repeated hooks from the same Codex session do not bloat state session history", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-session-dedupe-"));
+
+  try {
+    const env = { PLUGIN_DATA: root };
+    const input = { session_id: "codex-session-1", cwd: "/repo/app" };
+    const config = resolveConfig(env);
+    const paths = resolveProjectPaths(input, config, env);
+    await loadOrCreateThreadState(paths, input, "startup");
+    await loadOrCreateThreadState(paths, input, "resume");
+    await loadOrCreateThreadState(paths, input, "resume");
+
+    const stateJson = JSON.parse(await readFile(paths.statePath, "utf8"));
+    assert.equal(stateJson.codex_sessions.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("clear starts a new logical thread unless configured otherwise", async () => {
   const root = await mkdtemp(join(tmpdir(), "thread-handoff-clear-"));
 

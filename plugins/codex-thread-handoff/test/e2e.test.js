@@ -193,3 +193,44 @@ test("PreCompact storage failures still allow compact and write diagnostics", as
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("concurrent PostToolUse hooks serialize storage writes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-concurrent-tools-"));
+
+  try {
+    const env = { PLUGIN_DATA: root };
+    await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: "/repo/concurrent",
+      session_id: "session-1",
+      prompt: "start"
+    }), env);
+
+    const results = await Promise.all(Array.from({ length: 80 }, (_, index) => runCli(
+      ["post-tool-use"],
+      JSON.stringify({
+        cwd: "/repo/concurrent",
+        session_id: "session-1",
+        tool_name: "Bash",
+        tool_input: { command: `echo ${index}` },
+        tool_response: { exit_code: 0, output: `ok ${index}` }
+      }),
+      env
+    )));
+
+    assert.equal(results.every((result) => result.code === 0), true);
+
+    const projectRoot = join(root, "codex-thread-handoff", "projects");
+    const [projectHash] = await readdir(projectRoot);
+    const activeThread = (await readFile(join(projectRoot, projectHash, "active_thread"), "utf8")).trim();
+    const events = (await readFile(join(projectRoot, projectHash, "threads", activeThread, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(JSON.parse);
+    assert.equal(events.filter((event) => event.type === "tool_observation").length, 80);
+
+    await assert.rejects(() => readFile(join(root, "codex-thread-handoff", "hook-errors.jsonl"), "utf8"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
