@@ -159,7 +159,7 @@ async function handleUserPromptSubmit(stdin, env) {
   const state = await loadOrCreateThreadState(paths, input, source);
   await recordUserPrompt(paths, state, input, config);
 
-  if (config.mode !== "observe" && shouldInjectForPrompt(prompt)) {
+  if (config.mode !== "observe" && config.injectOnUserPrompt && shouldInjectForPrompt(prompt)) {
     try {
       return jsonHookOutput(injectionOutput("UserPromptSubmit", await readInjectBrief(paths)));
     } catch {

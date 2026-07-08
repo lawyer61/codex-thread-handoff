@@ -11,7 +11,7 @@ The problem is simple: after Codex works for a long time, context may be compact
 The plugin uses Codex lifecycle hooks:
 
 - `SessionStart`: injects an existing handoff brief after compact by default; resume injection is opt-in.
-- `UserPromptSubmit`: records new user requirements and injects context when the prompt depends on prior work.
+- `UserPromptSubmit`: records new user requirements; it can be configured to inject context when the prompt depends on prior work, but does not inject by default.
 - `PostToolUse`: records tool calls and result summaries.
 - `Stop`: never blocks the active Codex flow; it only schedules a background summarizer when needed.
 - `PreCompact`: waits for the summarizer within a bounded budget, 8 seconds by default; compact always continues.
@@ -61,7 +61,7 @@ Concurrent writes are protected by summary job ids, trigger priority, and event 
 Install from the GitHub marketplace:
 
 ```bash
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -71,7 +71,7 @@ To update an older install:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -101,6 +101,7 @@ Common settings:
 export THREAD_HANDOFF_MODE=strict
 export THREAD_HANDOFF_INJECT_BUDGET_TOKENS=6000
 export THREAD_HANDOFF_INJECT_ON_RESUME=false
+export THREAD_HANDOFF_INJECT_ON_USER_PROMPT=false
 export THREAD_HANDOFF_STALE_AFTER_MINUTES=30
 export THREAD_HANDOFF_SUMMARIZER_TIMEOUT_MS=8000
 export THREAD_HANDOFF_PRECOMPACT_SUMMARIZER_TIMEOUT_MS=8000
@@ -131,12 +132,18 @@ Typical flow:
 3. At turn end, the Stop hook schedules a background summarizer.
 4. The summarizer updates `latest.md` and `latest.inject.md`.
 5. After compact, SessionStart injects a bounded handoff.
-6. When the user says "continue" or refers to prior work, UserPromptSubmit may inject the handoff too.
+6. `UserPromptSubmit` keeps recording user prompts; by default it does not inject the handoff.
 
 By default, `SessionStart(source=resume)` does not inject the handoff, so reopening an old Codex session does not automatically pull in prior working state. To inject on resume too:
 
 ```bash
 export THREAD_HANDOFF_INJECT_ON_RESUME=true
+```
+
+By default, `UserPromptSubmit` also does not inject the handoff, so an ordinary "continue" prompt does not reinsert old working state into the current context. To inject when the user says "continue" or refers to prior work:
+
+```bash
+export THREAD_HANDOFF_INJECT_ON_USER_PROMPT=true
 ```
 
 Run diagnostics:
@@ -182,7 +189,7 @@ Update with:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -200,7 +207,7 @@ Update with:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.4
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 

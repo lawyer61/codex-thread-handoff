@@ -25,6 +25,7 @@ export function resolveConfig(env = {}) {
     useCtx: booleanFromEnv(env.THREAD_HANDOFF_USE_CTX, true),
     redactSecrets: booleanFromEnv(env.THREAD_HANDOFF_REDACT_SECRETS, true),
     injectOnResume: booleanFromEnv(env.THREAD_HANDOFF_INJECT_ON_RESUME, false),
+    injectOnUserPrompt: booleanFromEnv(env.THREAD_HANDOFF_INJECT_ON_USER_PROMPT, false),
     keepThreadOnClear: booleanFromEnv(env.THREAD_HANDOFF_KEEP_THREAD_ON_CLEAR, false),
     stopHookContinuation: false,
     summarizerProvider: env.THREAD_HANDOFF_SUMMARIZER_PROVIDER || "openai-compatible",

@@ -19,6 +19,7 @@ test("config defaults match the ADR MVP", () => {
   assert.equal(config.useCtx, true);
   assert.equal(config.redactSecrets, true);
   assert.equal(config.injectOnResume, false);
+  assert.equal(config.injectOnUserPrompt, false);
   assert.equal(config.stopHookContinuation, false);
   assert.equal(config.summarizerProvider, "openai-compatible");
   assert.equal(config.summarizerModel, "gpt-5.4");
@@ -35,6 +36,14 @@ test("resume injection can be enabled by env", () => {
   });
 
   assert.equal(config.injectOnResume, true);
+});
+
+test("user-prompt handoff injection can be enabled by env", () => {
+  const config = resolveConfig({
+    THREAD_HANDOFF_INJECT_ON_USER_PROMPT: "true"
+  });
+
+  assert.equal(config.injectOnUserPrompt, true);
 });
 
 test("logical thread id is durable and distinct from codex session id", async () => {
