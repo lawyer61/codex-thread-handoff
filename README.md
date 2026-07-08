@@ -39,6 +39,7 @@ Handoff 由外部 summarizer 维护，而不是通过 Stop hook 阻塞当前 Cod
    - 调用 `codex exec` 作为 summarizer。
    - 适合复用 Codex 已配置的 provider 和认证，例如本机 `new-api`。
    - 插件不直接读取 `auth.json`，认证由 Codex 自己处理。
+   - 可配置 summarizer 推理强度，例如 `low`、`medium`、`high`，以及将来可能出现的 `ultra`。
    - 子进程会使用 `--skip-git-repo-check` 和 `--dangerously-bypass-hook-trust`，并设置 `THREAD_HANDOFF_MODE=off`，避免在 hook / plugin 目录或非 Git 目录中失败，也避免递归触发本插件 hooks。
 
 Summarizer 输出必须是 JSON：
@@ -61,7 +62,7 @@ Summarizer 输出必须是 JSON：
 从 GitHub marketplace 安装：
 
 ```bash
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -71,7 +72,7 @@ codex plugin add codex-thread-handoff@thread-handoff
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -95,6 +96,31 @@ export THREAD_HANDOFF_SUMMARIZER_MODEL=gpt-5.4
 export THREAD_HANDOFF_SUMMARIZER_CODEX_MODEL_PROVIDER=new-api
 ```
 
+配置 summarizer 推理强度：
+
+```bash
+export THREAD_HANDOFF_SUMMARIZER_REASONING_EFFORT=low
+```
+
+`codex-cli` provider 默认使用上面的通用配置，也可以单独覆盖：
+
+```bash
+export THREAD_HANDOFF_SUMMARIZER_CODEX_REASONING_EFFORT=ultra
+```
+
+插件不会限制推理强度枚举值，这样未来出现 `ultra` 等新值时可以直接透传给 Codex CLI。
+
+自定义 summarizer 请求头：
+
+```bash
+export THREAD_HANDOFF_SUMMARIZER_EXTRA_HEADERS_JSON='{"HTTP-Referer":"https://example.com","X-Title":"Codex Thread Handoff"}'
+
+export THREAD_HANDOFF_SUMMARIZER_EXTRA_ENV_HEADERS_JSON='{"X-Tenant":"MY_TENANT_HEADER"}'
+export MY_TENANT_HEADER='tenant-secret'
+```
+
+`openai-compatible` provider 会把这些 header 直接加到 API 请求上。`codex-cli` provider 会通过 Codex provider 的 `env_http_headers` 转发 header，因此需要 `THREAD_HANDOFF_SUMMARIZER_CODEX_MODEL_PROVIDER` 指向自定义 provider，例如 `new-api`。
+
 常用配置：
 
 ```bash
@@ -107,6 +133,7 @@ export THREAD_HANDOFF_SUMMARIZER_TIMEOUT_MS=8000
 export THREAD_HANDOFF_PRECOMPACT_SUMMARIZER_TIMEOUT_MS=8000
 export THREAD_HANDOFF_SUMMARIZER_CONTEXT_TOKENS=200000
 export THREAD_HANDOFF_SUMMARIZER_MAX_OUTPUT_TOKENS=12000
+export THREAD_HANDOFF_SUMMARIZER_REASONING_EFFORT=low
 export THREAD_HANDOFF_TRANSCRIPT_TAIL_BYTES=200000
 export THREAD_HANDOFF_SUMMARIZER_RECENT_EVENTS=200
 ```
@@ -152,7 +179,7 @@ export THREAD_HANDOFF_INJECT_ON_USER_PROMPT=true
 node plugins/codex-thread-handoff/bin/thread-handoff.js doctor --json </dev/null
 ```
 
-`doctor --json` 会报告当前 storage root、summarizer 配置和 hook 诊断日志路径。hook 内部错误会被写入 `hook-errors.jsonl`；生命周期 hook 会尽量 fail-safe 返回，避免 Codex 只能显示一个不可审计的 `hook exit with status code 1`。
+`doctor --json` 会报告当前 storage root、summarizer 配置和 hook 诊断日志路径。自定义 header 只显示 header name，不显示 value。hook 内部错误会被写入 `hook-errors.jsonl`；生命周期 hook 会尽量 fail-safe 返回，避免 Codex 只能显示一个不可审计的 `hook exit with status code 1`。
 
 本地开发测试：
 
@@ -176,6 +203,7 @@ python3 /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /w
 - 默认对 secret-shaped 内容脱敏。
 - `codex-cli` provider 不读取 `auth.json`，只调用 Codex。
 - `codex-cli` provider 调用 `codex exec --skip-git-repo-check`，用于绕过 summarizer 子进程在非 Git / 未信任工作目录中的启动检查。
+- 自定义 summarizer header 的值不会出现在 `doctor --json` 中；`codex-cli` provider 会通过环境变量传递 header 值，避免写进命令行参数。
 - Summarizer 输入是有界的：`state.json`、已有 `latest.md`、近期事件、git status/stat/diff、transcript tail；不会默认扫描整个仓库。
 - Handoff 是 working memory，不是 source of truth。
 
@@ -189,7 +217,7 @@ python3 /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /w
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -207,7 +235,7 @@ codex plugin add codex-thread-handoff@thread-handoff
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -220,4 +248,5 @@ codex plugin add codex-thread-handoff@thread-handoff
 - 暂不实现向量数据库、云同步、跨项目长期记忆或自动 `/compact`。
 - `ctx` 只作为 retrieval handle 方向，不自动查询。
 - `codex-cli` provider 依赖本机 `codex exec` 可用。
+- `codex-cli` provider 的自定义 header 需要使用自定义 Codex model provider，不能直接覆盖内置 `openai`、`ollama` 或 `lmstudio` provider。
 - 后台 Stop summarizer 是 fire-and-forget；失败会写事件，但不影响当前 Codex turn。

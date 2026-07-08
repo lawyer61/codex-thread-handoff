@@ -39,6 +39,7 @@ Supported providers:
    - Calls `codex exec` as the summarizer.
    - Useful when you want to reuse Codex's configured provider and auth, such as a local `new-api` provider.
    - The plugin does not read `auth.json`; Codex owns authentication.
+   - Summarizer reasoning effort is configurable, including future values such as `ultra`.
    - The child process uses `--skip-git-repo-check` and `--dangerously-bypass-hook-trust`, with `THREAD_HANDOFF_MODE=off`, so it can run from hook/plugin or non-Git directories without recursively triggering this plugin's hooks.
 
 The summarizer must return JSON:
@@ -61,7 +62,7 @@ Concurrent writes are protected by summary job ids, trigger priority, and event 
 Install from the GitHub marketplace:
 
 ```bash
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -71,7 +72,7 @@ To update an older install:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -95,6 +96,31 @@ export THREAD_HANDOFF_SUMMARIZER_MODEL=gpt-5.4
 export THREAD_HANDOFF_SUMMARIZER_CODEX_MODEL_PROVIDER=new-api
 ```
 
+Configure summarizer reasoning effort:
+
+```bash
+export THREAD_HANDOFF_SUMMARIZER_REASONING_EFFORT=low
+```
+
+The `codex-cli` provider uses the generic value by default, and can be overridden separately:
+
+```bash
+export THREAD_HANDOFF_SUMMARIZER_CODEX_REASONING_EFFORT=ultra
+```
+
+The plugin does not restrict reasoning effort to a fixed enum, so future values such as `ultra` can pass through to Codex CLI.
+
+Custom summarizer request headers:
+
+```bash
+export THREAD_HANDOFF_SUMMARIZER_EXTRA_HEADERS_JSON='{"HTTP-Referer":"https://example.com","X-Title":"Codex Thread Handoff"}'
+
+export THREAD_HANDOFF_SUMMARIZER_EXTRA_ENV_HEADERS_JSON='{"X-Tenant":"MY_TENANT_HEADER"}'
+export MY_TENANT_HEADER='tenant-secret'
+```
+
+The `openai-compatible` provider adds these headers directly to the API request. The `codex-cli` provider forwards them through Codex provider `env_http_headers`, so `THREAD_HANDOFF_SUMMARIZER_CODEX_MODEL_PROVIDER` must point at a custom provider such as `new-api`.
+
 Common settings:
 
 ```bash
@@ -107,6 +133,7 @@ export THREAD_HANDOFF_SUMMARIZER_TIMEOUT_MS=8000
 export THREAD_HANDOFF_PRECOMPACT_SUMMARIZER_TIMEOUT_MS=8000
 export THREAD_HANDOFF_SUMMARIZER_CONTEXT_TOKENS=200000
 export THREAD_HANDOFF_SUMMARIZER_MAX_OUTPUT_TOKENS=12000
+export THREAD_HANDOFF_SUMMARIZER_REASONING_EFFORT=low
 export THREAD_HANDOFF_TRANSCRIPT_TAIL_BYTES=200000
 export THREAD_HANDOFF_SUMMARIZER_RECENT_EVENTS=200
 ```
@@ -152,7 +179,7 @@ Run diagnostics:
 node plugins/codex-thread-handoff/bin/thread-handoff.js doctor --json </dev/null
 ```
 
-`doctor --json` reports the active storage root, summarizer configuration, and hook diagnostic log paths. Internal hook errors are written to `hook-errors.jsonl`; lifecycle hooks try to return fail-safe JSON instead of leaving Codex with only an unauditable `hook exit with status code 1`.
+`doctor --json` reports the active storage root, summarizer configuration, and hook diagnostic log paths. Custom headers are reported by header name only, not by value. Internal hook errors are written to `hook-errors.jsonl`; lifecycle hooks try to return fail-safe JSON instead of leaving Codex with only an unauditable `hook exit with status code 1`.
 
 Local development checks:
 
@@ -176,6 +203,7 @@ python3 /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /w
 - Secret-shaped content is redacted by default.
 - The `codex-cli` provider does not read `auth.json`; it only invokes Codex.
 - The `codex-cli` provider invokes `codex exec --skip-git-repo-check` so the summarizer child can bypass startup checks for non-Git or untrusted work directories.
+- Custom summarizer header values are not shown in `doctor --json`; the `codex-cli` provider passes header values through environment variables rather than command-line arguments.
 - Summarizer input is bounded: `state.json`, existing `latest.md`, recent events, git status/stat/diff, and transcript tail. It does not scan the full repository by default.
 - Handoff is working memory, not source of truth.
 
@@ -189,7 +217,7 @@ Update with:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -207,7 +235,7 @@ Update with:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.5
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -220,4 +248,5 @@ Since `v0.3.1`, hook failures try to write `hook-errors.jsonl` and return safe J
 - No vector database, cloud sync, cross-project long-term memory, or automatic `/compact`.
 - `ctx` is used only as a retrieval-handle direction; the plugin does not query it automatically.
 - The `codex-cli` provider requires local `codex exec`.
+- Custom headers for the `codex-cli` provider require a custom Codex model provider; they cannot directly override built-in `openai`, `ollama`, or `lmstudio` providers.
 - Background Stop summarization is fire-and-forget; failures are recorded as events but do not affect the active Codex turn.
