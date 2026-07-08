@@ -44,7 +44,11 @@ export async function runDoctor(input = {}, env = {}) {
       model: config.summarizerModel,
       baseUrl: config.summarizerBaseUrl,
       apiKeyEnv: config.summarizerApiKeyEnv,
-      apiKeyConfigured: Boolean(env[config.summarizerApiKeyEnv])
+      apiKeyConfigured: Boolean(env[config.summarizerApiKeyEnv]),
+      reasoningEffort: config.summarizerReasoningEffort,
+      codexReasoningEffort: config.summarizerCodexReasoningEffort,
+      extraHeaderNames: config.summarizerExtraHeaderNames,
+      extraHeadersError: config.summarizerExtraHeadersError
     },
     ctx: {
       enabled: config.useCtx,

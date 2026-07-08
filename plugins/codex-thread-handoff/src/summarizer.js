@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { getLatestEventSeq, readEvents, recordSummaryEvent } from "./events.js";
+import { resolveSummarizerExtraHeaders } from "./headers.js";
 import { requiredHandoffSections, validateHandoff } from "./handoff.js";
 import { renderInjectBrief } from "./inject.js";
 import { writeJsonAtomic, writeTextAtomic } from "./json-store.js";
@@ -15,6 +16,7 @@ import { redactSecrets } from "./redaction.js";
 const execFile = promisify(execFileCallback);
 const CONFIDENCE = new Set(["low", "medium", "high"]);
 const VALID_PROVIDERS = new Set(["openai-compatible", "codex-cli"]);
+const BUILT_IN_CODEX_PROVIDERS = new Set(["openai", "ollama", "lmstudio"]);
 
 export function summaryPriority(trigger) {
   return trigger === "precompact" ? 2 : 1;
@@ -144,12 +146,14 @@ export async function callOpenAICompatibleSummarizer(pkg, config, env, options =
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs || config.summarizerTimeoutMs || 8000);
   const baseUrl = String(config.summarizerBaseUrl || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const extraHeaders = resolveSummarizerExtraHeaders(env);
 
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       signal: controller.signal,
       headers: {
+        ...extraHeaders,
         "content-type": "application/json",
         authorization: `Bearer ${apiKey}`
       },
@@ -249,6 +253,43 @@ function runSpawn(command, args, options) {
   });
 }
 
+function tomlInlineStringMap(values) {
+  const entries = Object.entries(values);
+  if (entries.length === 0) return "{}";
+  return `{ ${entries.map(([key, value]) => `${JSON.stringify(key)} = ${JSON.stringify(value)}`).join(", ")} }`;
+}
+
+function codexCliHeaderEnv(config, env) {
+  const headers = resolveSummarizerExtraHeaders(env);
+  const entries = Object.entries(headers);
+  if (entries.length === 0) {
+    return { args: [], env: {} };
+  }
+
+  const provider = config.summarizerCodexModelProvider;
+  if (!provider || BUILT_IN_CODEX_PROVIDERS.has(provider)) {
+    throw new Error(
+      "codex-cli custom summarizer headers require THREAD_HANDOFF_SUMMARIZER_CODEX_MODEL_PROVIDER to name a custom provider"
+    );
+  }
+
+  const envMap = {};
+  const refs = {};
+  entries.forEach(([name, value], index) => {
+    const envName = `THREAD_HANDOFF_SUMMARIZER_HEADER_${index}`;
+    envMap[envName] = value;
+    refs[name] = envName;
+  });
+
+  return {
+    args: [
+      "-c",
+      `model_providers.${provider}.env_http_headers=${tomlInlineStringMap(refs)}`
+    ],
+    env: envMap
+  };
+}
+
 export async function callCodexCliSummarizer(pkg, config, env, options = {}) {
   const workDir = await mkdtemp(join(tmpdir(), "thread-handoff-codex-"));
   const schemaPath = join(workDir, "schema.json");
@@ -258,6 +299,7 @@ export async function callCodexCliSummarizer(pkg, config, env, options = {}) {
   try {
     await writeFile(schemaPath, `${JSON.stringify(outputSchema())}\n`, { mode: 0o600 });
 
+    const extraHeaderConfig = codexCliHeaderEnv(config, env);
     const args = [
       "exec",
       "--skip-git-repo-check",
@@ -278,7 +320,8 @@ export async function callCodexCliSummarizer(pkg, config, env, options = {}) {
       "--output-schema",
       schemaPath,
       "--output-last-message",
-      outputPath
+      outputPath,
+      ...extraHeaderConfig.args
     ];
 
     if (config.summarizerCodexModelProvider) {
@@ -303,6 +346,7 @@ export async function callCodexCliSummarizer(pkg, config, env, options = {}) {
       input: prompt,
       env: {
         ...env,
+        ...extraHeaderConfig.env,
         THREAD_HANDOFF_MODE: "off",
         THREAD_HANDOFF_SUMMARIZER_CHILD: "1"
       }

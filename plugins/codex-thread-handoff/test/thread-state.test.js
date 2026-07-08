@@ -26,7 +26,9 @@ test("config defaults match the ADR MVP", () => {
   assert.equal(config.summarizerApiKeyEnv, "OPENAI_API_KEY");
   assert.equal(config.summarizerContextTokens, 200000);
   assert.equal(config.precompactSummarizerTimeoutMs, 8000);
+  assert.equal(config.summarizerReasoningEffort, "low");
   assert.equal(config.summarizerCodexReasoningEffort, "low");
+  assert.deepEqual(config.summarizerExtraHeaderNames, []);
   assert.equal(config.transcriptTailBytes, 200000);
 });
 
@@ -44,6 +46,41 @@ test("user-prompt handoff injection can be enabled by env", () => {
   });
 
   assert.equal(config.injectOnUserPrompt, true);
+});
+
+test("summarizer reasoning effort can be set to future values", () => {
+  const config = resolveConfig({
+    THREAD_HANDOFF_SUMMARIZER_REASONING_EFFORT: "ultra"
+  });
+
+  assert.equal(config.summarizerReasoningEffort, "ultra");
+  assert.equal(config.summarizerCodexReasoningEffort, "ultra");
+});
+
+test("codex-cli reasoning effort override wins over generic summarizer effort", () => {
+  const config = resolveConfig({
+    THREAD_HANDOFF_SUMMARIZER_REASONING_EFFORT: "high",
+    THREAD_HANDOFF_SUMMARIZER_CODEX_REASONING_EFFORT: "ultra"
+  });
+
+  assert.equal(config.summarizerReasoningEffort, "high");
+  assert.equal(config.summarizerCodexReasoningEffort, "ultra");
+});
+
+test("summarizer extra header config exposes names but not values", () => {
+  const config = resolveConfig({
+    THREAD_HANDOFF_SUMMARIZER_EXTRA_HEADERS_JSON: JSON.stringify({
+      "X-Trace": "secret-static"
+    }),
+    THREAD_HANDOFF_SUMMARIZER_EXTRA_ENV_HEADERS_JSON: JSON.stringify({
+      "X-Tenant": "THREAD_HANDOFF_TEST_TENANT"
+    }),
+    THREAD_HANDOFF_TEST_TENANT: "secret-env"
+  });
+
+  assert.deepEqual(config.summarizerExtraHeaderNames, ["X-Tenant", "X-Trace"]);
+  assert.equal(JSON.stringify(config).includes("secret-static"), false);
+  assert.equal(JSON.stringify(config).includes("secret-env"), false);
 });
 
 test("logical thread id is durable and distinct from codex session id", async () => {

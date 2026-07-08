@@ -161,7 +161,8 @@ if (outputIndex < 0) process.exit(2);
 writeFileSync("${argsPath}", JSON.stringify({
   args,
   threadHandoffMode: process.env.THREAD_HANDOFF_MODE,
-  apiKey: process.env.OPENAI_API_KEY || null
+  apiKey: process.env.OPENAI_API_KEY || null,
+  headerEnv: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("THREAD_HANDOFF_SUMMARIZER_HEADER_")))
 }));
 writeFileSync(args[outputIndex + 1], JSON.stringify({
   latest_md: ${JSON.stringify(validHandoff("Written by Codex CLI provider"))},
@@ -182,14 +183,18 @@ writeFileSync(args[outputIndex + 1], JSON.stringify({
       summarizerModel: "gpt-5.4",
       summarizerCodexBin: bin,
       summarizerCodexModelProvider: "new-api",
-      summarizerCodexReasoningEffort: "low",
+      summarizerCodexReasoningEffort: "ultra",
       summarizerTimeoutMs: 8000,
       summarizerContextTokens: 200000,
       summarizerRecentEvents: 200,
       transcriptTailBytes: 200000,
       redactSecrets: true,
       injectBudgetTokens: 6000
-    }, {}, "precompact");
+    }, {
+      THREAD_HANDOFF_SUMMARIZER_EXTRA_HEADERS_JSON: JSON.stringify({
+        "X-Trace": "trace-secret"
+      })
+    }, "precompact");
 
     assert.equal(result.ok, true);
     assert.match(await readFile(paths.latestPath, "utf8"), /Written by Codex CLI provider/);
@@ -202,7 +207,14 @@ writeFileSync(args[outputIndex + 1], JSON.stringify({
     assert.ok(invocation.args.includes("-m"));
     assert.ok(invocation.args.includes("gpt-5.4"));
     assert.ok(invocation.args.includes('model_provider="new-api"'));
-    assert.ok(invocation.args.includes('model_reasoning_effort="low"'));
+    assert.ok(invocation.args.includes('model_reasoning_effort="ultra"'));
+    assert.equal(JSON.stringify(invocation.args).includes("trace-secret"), false);
+    assert.ok(invocation.args.some((arg) => (
+      arg.includes("model_providers.new-api.env_http_headers=") &&
+      arg.includes("\"X-Trace\"") &&
+      arg.includes("THREAD_HANDOFF_SUMMARIZER_HEADER_")
+    )));
+    assert.deepEqual(Object.values(invocation.headerEnv), ["trace-secret"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

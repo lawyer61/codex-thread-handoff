@@ -51,3 +51,22 @@ test("doctor --json reports project-local fallback when .codex is a file", async
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("doctor --json reports extra header names without values", async () => {
+  const result = await runCli(["doctor", "--json"], "", {
+    PLUGIN_DATA: "/tmp/thread-handoff-doctor",
+    THREAD_HANDOFF_SUMMARIZER_EXTRA_HEADERS_JSON: JSON.stringify({
+      "X-Trace": "secret-static"
+    }),
+    THREAD_HANDOFF_SUMMARIZER_EXTRA_ENV_HEADERS_JSON: JSON.stringify({
+      "X-Tenant": "THREAD_HANDOFF_TEST_TENANT"
+    }),
+    THREAD_HANDOFF_TEST_TENANT: "secret-env"
+  });
+
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.config.summarizerExtraHeaderNames, ["X-Tenant", "X-Trace"]);
+  assert.deepEqual(report.summarizer.extraHeaderNames, ["X-Tenant", "X-Trace"]);
+  assert.equal(result.stdout.includes("secret-static"), false);
+  assert.equal(result.stdout.includes("secret-env"), false);
+});

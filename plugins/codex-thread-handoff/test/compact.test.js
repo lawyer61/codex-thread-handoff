@@ -161,6 +161,74 @@ test("PreCompact waits for the external summarizer and writes latest artifacts",
   }
 });
 
+test("OpenAI-compatible summarizer sends configured extra headers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-precompact-headers-"));
+  const latest = `${renderInitialHandoff({
+    logical_thread_id: "lt_test",
+    context_epoch: 1
+  }, {
+    project: "example",
+    repo_root: "/repo"
+  })}\n\nSummarized with custom headers.\n`;
+
+  try {
+    const threadDir = await seed(root, "stale");
+    await writeFile(join(threadDir, "events.jsonl"), `${JSON.stringify({
+      seq: 8,
+      type: "user_prompt",
+      timestamp: "2026-07-07T00:00:00.000Z",
+      prompt_summary: "finish the plugin"
+    })}\n`);
+
+    let requestHeaders;
+    await withServer((request, response) => {
+      requestHeaders = request.headers;
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                latest_md: latest,
+                confidence: "high",
+                source_event_seq: 8,
+                warnings: []
+              })
+            }
+          }]
+        }));
+      });
+    }, async (baseUrl) => {
+      const result = await runCli(["pre-compact"], JSON.stringify({
+        cwd: "/repo",
+        project_hash_override: "preseed",
+        trigger: "manual"
+      }), {
+        PLUGIN_DATA: root,
+        THREAD_HANDOFF_MODE: "strict",
+        THREAD_HANDOFF_SUMMARIZER_BASE_URL: baseUrl,
+        THREAD_HANDOFF_SUMMARIZER_EXTRA_HEADERS_JSON: JSON.stringify({
+          "X-Trace": "trace-static"
+        }),
+        THREAD_HANDOFF_SUMMARIZER_EXTRA_ENV_HEADERS_JSON: JSON.stringify({
+          "X-Tenant": "THREAD_HANDOFF_TEST_TENANT"
+        }),
+        THREAD_HANDOFF_TEST_TENANT: "tenant-from-env",
+        OPENAI_API_KEY: "test-key"
+      });
+
+      assert.deepEqual(JSON.parse(result.stdout), { continue: true });
+    });
+
+    assert.equal(requestHeaders["x-trace"], "trace-static");
+    assert.equal(requestHeaders["x-tenant"], "tenant-from-env");
+    assert.equal(requestHeaders.authorization, "Bearer test-key");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("PreCompact accepts a valid handoff file when freshness metadata was not updated yet", async () => {
   const root = await mkdtemp(join(tmpdir(), "thread-handoff-precompact-filefresh-"));
 

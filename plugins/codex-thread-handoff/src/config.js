@@ -1,3 +1,5 @@
+import { summarizeSummarizerExtraHeaders } from "./headers.js";
+
 const VALID_MODES = new Set(["off", "observe", "permissive", "strict"]);
 
 function numberFromEnv(value, fallback) {
@@ -15,6 +17,8 @@ export function resolveConfig(env = {}) {
     ? env.THREAD_HANDOFF_MODE
     : "strict";
   const summarizerTimeoutMs = numberFromEnv(env.THREAD_HANDOFF_SUMMARIZER_TIMEOUT_MS, 8000);
+  const summarizerReasoningEffort = env.THREAD_HANDOFF_SUMMARIZER_REASONING_EFFORT || "low";
+  const extraHeaders = summarizeSummarizerExtraHeaders(env);
 
   return {
     mode,
@@ -34,6 +38,9 @@ export function resolveConfig(env = {}) {
     summarizerApiKeyEnv: env.THREAD_HANDOFF_SUMMARIZER_API_KEY_ENV || "OPENAI_API_KEY",
     summarizerContextTokens: numberFromEnv(env.THREAD_HANDOFF_SUMMARIZER_CONTEXT_TOKENS, 200000),
     summarizerMaxOutputTokens: numberFromEnv(env.THREAD_HANDOFF_SUMMARIZER_MAX_OUTPUT_TOKENS, 12000),
+    summarizerReasoningEffort,
+    summarizerExtraHeaderNames: extraHeaders.names,
+    summarizerExtraHeadersError: extraHeaders.error,
     summarizerTimeoutMs,
     precompactSummarizerTimeoutMs: numberFromEnv(
       env.THREAD_HANDOFF_PRECOMPACT_SUMMARIZER_TIMEOUT_MS,
@@ -41,7 +48,7 @@ export function resolveConfig(env = {}) {
     ),
     summarizerCodexBin: env.THREAD_HANDOFF_SUMMARIZER_CODEX_BIN || "codex",
     summarizerCodexModelProvider: env.THREAD_HANDOFF_SUMMARIZER_CODEX_MODEL_PROVIDER || "",
-    summarizerCodexReasoningEffort: env.THREAD_HANDOFF_SUMMARIZER_CODEX_REASONING_EFFORT || "low",
+    summarizerCodexReasoningEffort: env.THREAD_HANDOFF_SUMMARIZER_CODEX_REASONING_EFFORT || summarizerReasoningEffort,
     transcriptTailBytes: numberFromEnv(env.THREAD_HANDOFF_TRANSCRIPT_TAIL_BYTES, 200000),
     summarizerRecentEvents: numberFromEnv(env.THREAD_HANDOFF_SUMMARIZER_RECENT_EVENTS, 200),
     summarizerBackgroundSpawn: booleanFromEnv(env.THREAD_HANDOFF_SUMMARIZER_BACKGROUND_SPAWN, true)
