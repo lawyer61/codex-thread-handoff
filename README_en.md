@@ -13,7 +13,7 @@ The plugin uses Codex lifecycle hooks:
 - `SessionStart`: injects an existing handoff brief after compact by default; resume injection is opt-in.
 - `UserPromptSubmit`: records new user requirements; it can be configured to inject context when the prompt depends on prior work, but does not inject by default.
 - `PostToolUse`: records tool calls and result summaries.
-- `Stop`: never blocks the active Codex flow; it only schedules a background summarizer when needed.
+- `Stop`: never blocks the active Codex flow; by default it does not call the summarizer, and can be configured to schedule a background summarizer when the handoff is stale.
 - `PreCompact`: waits for the summarizer within a bounded budget, 8 seconds by default; compact always continues.
 - `PostCompact`: records the new context epoch and rebuilds the injection brief.
 
@@ -26,7 +26,7 @@ The plugin keeps two kinds of artifacts:
 
 ## Summarizer
 
-The handoff is maintained by an external summarizer instead of blocking the active Codex thread from the Stop hook.
+The handoff is maintained by an external summarizer instead of blocking the active Codex thread from the Stop hook. By default, only PreCompact actively calls the summarizer; if you also want end-of-turn background refreshes, enable the Stop summarizer explicitly.
 
 Supported providers:
 
@@ -55,14 +55,14 @@ The summarizer must return JSON:
 
 The plugin validates the JSON, validates required handoff sections, redacts secrets again, atomically writes `latest.md`, and generates `latest.inject.md` from it.
 
-Concurrent writes are protected by summary job ids, trigger priority, and event high-water marks. `precompact` has higher priority than `stop`, so a late stale job cannot overwrite a newer handoff.
+Concurrent writes are protected by summary job ids, trigger priority, and event high-water marks. When the Stop summarizer is enabled, `precompact` has higher priority than `stop`, so a late stale job cannot overwrite a newer handoff.
 
 ## Installation
 
 Install from the GitHub marketplace:
 
 ```bash
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.7
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -72,7 +72,7 @@ To update an older install:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.7
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -128,6 +128,7 @@ export THREAD_HANDOFF_MODE=strict
 export THREAD_HANDOFF_INJECT_BUDGET_TOKENS=6000
 export THREAD_HANDOFF_INJECT_ON_RESUME=false
 export THREAD_HANDOFF_INJECT_ON_USER_PROMPT=false
+export THREAD_HANDOFF_STOP_SUMMARIZER_ENABLED=false
 export THREAD_HANDOFF_STALE_AFTER_MINUTES=30
 export THREAD_HANDOFF_SUMMARIZER_TIMEOUT_MS=8000
 export THREAD_HANDOFF_PRECOMPACT_SUMMARIZER_TIMEOUT_MS=8000
@@ -156,8 +157,8 @@ Typical flow:
 
 1. Start a long task.
 2. The plugin records user prompts and tool observations.
-3. At turn end, the Stop hook schedules a background summarizer.
-4. The summarizer updates `latest.md` and `latest.inject.md`.
+3. At turn end, the Stop hook performs only lightweight checks by default and does not call the summarizer.
+4. Before compact, PreCompact calls the summarizer within the default 8-second budget and updates `latest.md` and `latest.inject.md`.
 5. After compact, SessionStart injects a bounded handoff.
 6. `UserPromptSubmit` keeps recording user prompts; by default it does not inject the handoff.
 
@@ -171,6 +172,12 @@ By default, `UserPromptSubmit` also does not inject the handoff, so an ordinary 
 
 ```bash
 export THREAD_HANDOFF_INJECT_ON_USER_PROMPT=true
+```
+
+By default, the Stop hook does not call the summarizer, which avoids spending extra tokens after every turn. To refresh in the background at turn end when the handoff is stale:
+
+```bash
+export THREAD_HANDOFF_STOP_SUMMARIZER_ENABLED=true
 ```
 
 Run diagnostics:
@@ -194,11 +201,12 @@ python3 /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /w
 - `off`: no capture, no injection.
 - `observe`: records events only.
 - `permissive`: records, injects, and attempts handoff maintenance; failures do not block.
-- `strict`: stricter validation and diagnostics, but Stop and PreCompact still do not block the original Codex flow.
+- `strict`: stricter validation and diagnostics, but Stop and PreCompact still do not block the original Codex flow; the Stop summarizer remains disabled by default.
 
 ## Safety Boundaries
 
 - Stop never uses `decision:"block"`.
+- The Stop summarizer is disabled by default; when enabled, it is still fire-and-forget and does not wait for completion.
 - PreCompact always returns `continue:true`.
 - Secret-shaped content is redacted by default.
 - The `codex-cli` provider does not read `auth.json`; it only invokes Codex.
@@ -217,7 +225,7 @@ Update with:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.7
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -235,7 +243,7 @@ Update with:
 
 ```bash
 codex plugin marketplace remove thread-handoff
-codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.6
+codex plugin marketplace add lawyer61/codex-thread-handoff --ref v0.3.7
 codex plugin add codex-thread-handoff@thread-handoff
 ```
 
@@ -249,4 +257,4 @@ Since `v0.3.1`, hook failures try to write `hook-errors.jsonl` and return safe J
 - `ctx` is used only as a retrieval-handle direction; the plugin does not query it automatically.
 - The `codex-cli` provider requires local `codex exec`.
 - Custom headers for the `codex-cli` provider require a custom Codex model provider; they cannot directly override built-in `openai`, `ollama`, or `lmstudio` providers.
-- Background Stop summarization is fire-and-forget; failures are recorded as events but do not affect the active Codex turn.
+- Background Stop summarization is disabled by default; when enabled, it is fire-and-forget, and failures are recorded as events without affecting the active Codex turn.

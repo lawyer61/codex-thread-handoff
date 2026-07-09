@@ -20,6 +20,7 @@ test("config defaults match the ADR MVP", () => {
   assert.equal(config.redactSecrets, true);
   assert.equal(config.injectOnResume, false);
   assert.equal(config.injectOnUserPrompt, false);
+  assert.equal(config.stopSummarizerEnabled, false);
   assert.equal(config.stopHookContinuation, false);
   assert.equal(config.summarizerProvider, "openai-compatible");
   assert.equal(config.summarizerModel, "gpt-5.4");
@@ -46,6 +47,14 @@ test("user-prompt handoff injection can be enabled by env", () => {
   });
 
   assert.equal(config.injectOnUserPrompt, true);
+});
+
+test("stop summarizer can be enabled by env", () => {
+  const config = resolveConfig({
+    THREAD_HANDOFF_STOP_SUMMARIZER_ENABLED: "true"
+  });
+
+  assert.equal(config.stopSummarizerEnabled, true);
 });
 
 test("summarizer reasoning effort can be set to future values", () => {

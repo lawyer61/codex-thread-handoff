@@ -6,7 +6,7 @@ import test from "node:test";
 import { runCli } from "../src/cli.js";
 import { renderInitialHandoff } from "../src/handoff.js";
 
-test("Stop never blocks when the handoff is stale", async () => {
+test("Stop does not schedule a summarizer by default when the handoff is stale", async () => {
   const root = await mkdtemp(join(tmpdir(), "thread-handoff-stop-"));
 
   try {
@@ -30,21 +30,25 @@ test("Stop never blocks when the handoff is stale", async () => {
       cwd: "/repo",
       project_hash_override: "preseed"
     }), {
-      PLUGIN_DATA: root
+      PLUGIN_DATA: root,
+      OPENAI_API_KEY: "test-key",
+      THREAD_HANDOFF_SUMMARIZER_BASE_URL: "http://127.0.0.1:9/v1",
+      THREAD_HANDOFF_SUMMARIZER_BACKGROUND_SPAWN: "false"
     });
 
     assert.equal(result.code, 0);
     assert.deepEqual(JSON.parse(result.stdout), {});
 
-    const events = await readFile(join(threadDir, "events.jsonl"), "utf8");
-    assert.match(events, /summary_job_skipped/);
-    assert.match(events, /api_key_missing/);
+    await assert.rejects(
+      () => readFile(join(threadDir, "events.jsonl"), "utf8"),
+      (error) => error.code === "ENOENT"
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("Stop records a background summarizer job when the API key is configured", async () => {
+test("Stop records a background summarizer job when enabled and the API key is configured", async () => {
   const root = await mkdtemp(join(tmpdir(), "thread-handoff-stop-schema-"));
 
   try {
@@ -71,6 +75,7 @@ test("Stop records a background summarizer job when the API key is configured", 
       PLUGIN_DATA: root,
       OPENAI_API_KEY: "test-key",
       THREAD_HANDOFF_SUMMARIZER_BASE_URL: "http://127.0.0.1:9/v1",
+      THREAD_HANDOFF_STOP_SUMMARIZER_ENABLED: "true",
       THREAD_HANDOFF_SUMMARIZER_BACKGROUND_SPAWN: "false"
     });
 

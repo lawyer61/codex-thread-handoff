@@ -198,7 +198,7 @@ async function handleStop(stdin, env) {
     // Missing handoff is handled by the stale check below.
   }
 
-  if (isHandoffStale(state, config)) {
+  if (config.stopSummarizerEnabled && isHandoffStale(state, config)) {
     await scheduleBackgroundSummarizer(paths, state, input, config, env, "stop");
   }
 
