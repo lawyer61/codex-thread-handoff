@@ -75,13 +75,14 @@ async function runGit(repoRoot, args, maxChars) {
   }
 }
 
-export async function createSummaryJob(paths, trigger) {
+export async function createSummaryJob(paths, trigger, state) {
   const inputEventSeqMax = await getLatestEventSeq(paths);
   return {
     job_id: `sum_${Date.now()}_${randomUUID().slice(0, 8)}`,
     trigger,
     priority: summaryPriority(trigger),
     input_event_seq_max: inputEventSeqMax,
+    logical_thread_id: state?.logical_thread_id || paths.logicalThreadId || null,
     started_at: new Date().toISOString()
   };
 }
@@ -472,7 +473,7 @@ export async function applySummarizerOutput(paths, job, output, config) {
 }
 
 export async function runExternalSummarizer(paths, state, input, config, env, trigger, options = {}) {
-  const job = options.job || await createSummaryJob(paths, trigger);
+  const job = options.job || await createSummaryJob(paths, trigger, state);
 
   if (!VALID_PROVIDERS.has(config.summarizerProvider)) {
     await recordSummaryEvent(paths, state, {
@@ -522,7 +523,7 @@ export async function runExternalSummarizer(paths, state, input, config, env, tr
 }
 
 export async function scheduleBackgroundSummarizer(paths, state, input, config, env, trigger = "stop") {
-  const job = await createSummaryJob(paths, trigger);
+  const job = await createSummaryJob(paths, trigger, state);
 
   if (!VALID_PROVIDERS.has(config.summarizerProvider)) {
     await recordSummaryEvent(paths, state, {

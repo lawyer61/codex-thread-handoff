@@ -15,6 +15,8 @@ export function resolveProjectPaths(input = {}, config = {}, env = {}) {
     sha256(`${repoRoot}\n${input.git_remote || ""}`).slice(0, 16);
   const projectDir = join(storageRoot, "projects", projectHash);
   const activeThreadPath = join(projectDir, "active_thread");
+  const threadsDir = join(projectDir, "threads");
+  const sessionsDir = join(projectDir, "sessions");
 
   return {
     storageRoot,
@@ -23,7 +25,11 @@ export function resolveProjectPaths(input = {}, config = {}, env = {}) {
     repoRoot,
     projectDir,
     activeThreadPath,
-    threadDirFor: (logicalThreadId) => join(projectDir, "threads", logicalThreadId)
+    threadsDir,
+    sessionsDir,
+    threadRoutingLockPath: join(projectDir, "thread-routing.lock"),
+    sessionBindingPathFor: (sessionId) => join(sessionsDir, `${sha256(String(sessionId))}.json`),
+    threadDirFor: (logicalThreadId) => join(threadsDir, logicalThreadId)
   };
 }
 
@@ -45,6 +51,7 @@ function projectLocalStorageRoot(repoRoot) {
 
 export function attachThreadPaths(paths, logicalThreadId) {
   const threadDir = paths.threadDirFor(logicalThreadId);
+  paths.logicalThreadId = logicalThreadId;
   paths.threadDir = threadDir;
   paths.statePath = join(threadDir, "state.json");
   paths.latestPath = join(threadDir, "latest.md");

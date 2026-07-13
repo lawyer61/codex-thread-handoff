@@ -95,6 +95,44 @@ test("new task language starts a new logical thread", async () => {
   }
 });
 
+test("Codex sessions in the same project keep separate event ledgers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-session-isolation-"));
+
+  try {
+    const env = { PLUGIN_DATA: root };
+    await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: "/repo/shared",
+      session_id: "session-a",
+      prompt: "work only on alpha"
+    }), env);
+    await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: "/repo/shared",
+      session_id: "session-b",
+      prompt: "work only on beta"
+    }), env);
+
+    const projectRoot = join(root, "codex-thread-handoff", "projects");
+    const [projectHash] = await readdir(projectRoot);
+    const threadsDir = join(projectRoot, projectHash, "threads");
+    const threadIds = await readdir(threadsDir);
+    assert.equal(threadIds.length, 2);
+
+    const ledgers = {};
+    for (const threadId of threadIds) {
+      const state = JSON.parse(await readFile(join(threadsDir, threadId, "state.json"), "utf8"));
+      const sessionId = state.codex_sessions[0].session_id;
+      ledgers[sessionId] = await readFile(join(threadsDir, threadId, "events.jsonl"), "utf8");
+    }
+
+    assert.match(ledgers["session-a"], /work only on alpha/);
+    assert.doesNotMatch(ledgers["session-a"], /work only on beta/);
+    assert.match(ledgers["session-b"], /work only on beta/);
+    assert.doesNotMatch(ledgers["session-b"], /work only on alpha/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("project-local mode writes storage under repo and protects it with gitignore", async () => {
   const root = await mkdtemp(join(tmpdir(), "thread-handoff-project-local-"));
 
@@ -227,7 +265,9 @@ test("concurrent PostToolUse hooks serialize storage writes", async () => {
       .split("\n")
       .filter(Boolean)
       .map(JSON.parse);
-    assert.equal(events.filter((event) => event.type === "tool_observation").length, 80);
+    const toolEvents = events.filter((event) => event.type === "tool_observation");
+    assert.equal(toolEvents.length, 80);
+    assert.equal(new Set(toolEvents.map((event) => event.seq)).size, 80);
 
     await assert.rejects(() => readFile(join(root, "codex-thread-handoff", "hook-errors.jsonl"), "utf8"));
   } finally {

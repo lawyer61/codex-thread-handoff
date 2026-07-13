@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { runCli } from "../src/cli.js";
 import { renderInitialHandoff } from "../src/handoff.js";
 import { applySummarizerOutput, runExternalSummarizer } from "../src/summarizer.js";
 
@@ -215,6 +216,60 @@ writeFileSync(args[outputIndex + 1], JSON.stringify({
       arg.includes("THREAD_HANDOFF_SUMMARIZER_HEADER_")
     )));
     assert.deepEqual(Object.values(invocation.headerEnv), ["trace-secret"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a background summarizer job stays bound to the thread that scheduled it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-summary-thread-binding-"));
+
+  try {
+    const env = { PLUGIN_DATA: root };
+    await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: "/repo",
+      session_id: "session-1",
+      prompt: "work on the original task"
+    }), env);
+
+    const projectDir = join(root, "codex-thread-handoff", "projects");
+    const [projectHash] = await readdir(projectDir);
+    const projectPath = join(projectDir, projectHash);
+    const originalThread = (await readFile(join(projectPath, "active_thread"), "utf8")).trim();
+
+    await runCli(["user-prompt-submit"], JSON.stringify({
+      cwd: "/repo",
+      session_id: "session-1",
+      prompt: "新任务：不要继承之前，重新开始"
+    }), env);
+    const replacementThread = (await readFile(join(projectPath, "active_thread"), "utf8")).trim();
+    assert.notEqual(replacementThread, originalThread);
+
+    await runCli(["summarize", "--trigger", "stop"], JSON.stringify({
+      cwd: "/repo",
+      session_id: "session-1"
+    }), {
+      ...env,
+      THREAD_HANDOFF_SUMMARIZER_JOB_JSON: JSON.stringify({
+        job_id: "job_original_thread",
+        trigger: "stop",
+        priority: 1,
+        input_event_seq_max: 1,
+        logical_thread_id: originalThread,
+        started_at: "2026-07-13T00:00:00.000Z"
+      })
+    });
+
+    const originalEvents = await readFile(
+      join(projectPath, "threads", originalThread, "events.jsonl"),
+      "utf8"
+    );
+    const replacementEvents = await readFile(
+      join(projectPath, "threads", replacementThread, "events.jsonl"),
+      "utf8"
+    );
+    assert.match(originalEvents, /summary_job_skipped/);
+    assert.doesNotMatch(replacementEvents, /summary_job_skipped/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

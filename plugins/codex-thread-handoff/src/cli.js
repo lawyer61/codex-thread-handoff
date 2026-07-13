@@ -32,6 +32,7 @@ import {
   advanceContextEpoch,
   loadOrCreateThreadState,
   readThreadState,
+  readThreadStateFor,
   saveThreadState
 } from "./thread-state.js";
 import {
@@ -270,7 +271,6 @@ async function handleSummarize(argv, stdin, env) {
     return jsonHookOutput({});
   }
 
-  const state = await loadOrCreateThreadState(paths, input, "resume");
   let job;
   try {
     job = env.THREAD_HANDOFF_SUMMARIZER_JOB_JSON
@@ -279,6 +279,9 @@ async function handleSummarize(argv, stdin, env) {
   } catch {
     job = undefined;
   }
+  const state = job?.logical_thread_id
+    ? await readThreadStateFor(paths, job.logical_thread_id)
+    : await loadOrCreateThreadState(paths, input, "resume");
   await runExternalSummarizer(paths, state, input, config, env, trigger, { job });
   return jsonHookOutput({});
 }
