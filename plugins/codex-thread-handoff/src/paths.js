@@ -54,6 +54,7 @@ export function attachThreadPaths(paths, logicalThreadId) {
   paths.logicalThreadId = logicalThreadId;
   paths.threadDir = threadDir;
   paths.statePath = join(threadDir, "state.json");
+  paths.stateMutationLockPath = join(threadDir, "state-mutation.lock");
   paths.latestPath = join(threadDir, "latest.md");
   paths.injectPath = join(threadDir, "latest.inject.md");
   paths.eventsPath = join(threadDir, "events.jsonl");

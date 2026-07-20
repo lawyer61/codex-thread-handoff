@@ -12,6 +12,17 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/bin/thread-handoff.js\" subagent-start",
+            "statusMessage": "Loading parent thread handoff"
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -25,7 +36,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+        "matcher": "Bash|apply_patch|Edit|Write|Agent|spawn_agent|send_input|send_message|followup_task|wait|wait_agent|close_agent|resume_agent|interrupt_agent|list_agents|mcp__.*",
         "hooks": [
           {
             "type": "command",
@@ -42,6 +53,17 @@
             "type": "command",
             "command": "node \"$PLUGIN_ROOT/bin/thread-handoff.js\" stop",
             "statusMessage": "Updating thread handoff"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/bin/thread-handoff.js\" subagent-stop",
+            "statusMessage": "Recording subagent result"
           }
         ]
       }

@@ -8,7 +8,9 @@ import { resolveConfig } from "../src/config.js";
 import { resolveProjectPaths } from "../src/paths.js";
 import {
   advanceContextEpoch,
-  loadOrCreateThreadState
+  advanceContextEpochForInput,
+  loadOrCreateThreadState,
+  mergeHandoffState
 } from "../src/thread-state.js";
 
 test("config defaults match the ADR MVP", () => {
@@ -21,6 +23,7 @@ test("config defaults match the ADR MVP", () => {
   assert.equal(config.redactSecrets, true);
   assert.equal(config.injectOnResume, false);
   assert.equal(config.injectOnUserPrompt, false);
+  assert.equal(config.injectOnSubagentStart, true);
   assert.equal(config.stopSummarizerEnabled, false);
   assert.equal(config.stopHookContinuation, false);
   assert.equal(config.summarizerProvider, "openai-compatible");
@@ -48,6 +51,14 @@ test("user-prompt handoff injection can be enabled by env", () => {
   });
 
   assert.equal(config.injectOnUserPrompt, true);
+});
+
+test("subagent-start handoff injection can be disabled by env", () => {
+  const config = resolveConfig({
+    THREAD_HANDOFF_INJECT_ON_SUBAGENT_START: "false"
+  });
+
+  assert.equal(config.injectOnSubagentStart, false);
 });
 
 test("stop summarizer can be enabled by env", () => {
@@ -137,6 +148,161 @@ test("logical thread id is durable per Codex session and distinct from session i
       "utf8"
     ));
     assert.equal(stateJson.logical_thread_id, first.logical_thread_id);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("thread-spawned agents share the root logical thread and keep execution lanes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-agent-lanes-"));
+
+  try {
+    const env = { PLUGIN_DATA: root };
+    const config = resolveConfig(env);
+    const rootInput = {
+      session_id: "shared-session",
+      transcript_path: "/transcripts/root.jsonl",
+      cwd: "/repo/app"
+    };
+    const paths = resolveProjectPaths(rootInput, config, env);
+    const rootState = await loadOrCreateThreadState(paths, rootInput, "startup");
+    const childState = await loadOrCreateThreadState(paths, {
+      session_id: "shared-session",
+      turn_id: "turn-child-1",
+      agent_id: "agent-child-1",
+      agent_type: "worker",
+      transcript_path: "/transcripts/child-1.jsonl",
+      cwd: "/repo/app"
+    }, "resume");
+
+    assert.equal(childState.logical_thread_id, rootState.logical_thread_id);
+    assert.equal(childState.agent_lanes?.length, 1);
+    const [lane] = childState.agent_lanes;
+    assert.equal(lane.agent_id, "agent-child-1");
+    assert.equal(lane.agent_type, "worker");
+    assert.equal(lane.transcript_path, "/transcripts/child-1.jsonl");
+    assert.equal(lane.parent_transcript_path, null);
+    assert.equal(lane.context_epoch, 1);
+    assert.equal(lane.status, "active");
+    assert.equal(typeof lane.started_at, "string");
+    assert.equal(typeof lane.last_updated_at, "string");
+    assert.equal(lane.completed_at, null);
+
+    const binding = JSON.parse(await readFile(
+      sessionBindingPath(paths, "shared-session"),
+      "utf8"
+    ));
+    assert.equal(binding.transcript_path, "/transcripts/root.jsonl");
+    assert.equal(childState.codex_sessions[0].transcript_path, "/transcripts/root.jsonl");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent child hooks retain every agent execution lane", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-concurrent-agent-lanes-"));
+
+  try {
+    const env = { PLUGIN_DATA: root };
+    const config = resolveConfig(env);
+    const rootInput = {
+      session_id: "shared-session",
+      transcript_path: "/transcripts/root.jsonl",
+      cwd: "/repo/app"
+    };
+    const paths = resolveProjectPaths(rootInput, config, env);
+    await loadOrCreateThreadState(paths, rootInput, "startup");
+
+    await Promise.all(Array.from({ length: 12 }, (_, index) => loadOrCreateThreadState(
+      resolveProjectPaths(rootInput, config, env),
+      {
+        session_id: "shared-session",
+        turn_id: `turn-child-${index}`,
+        agent_id: `agent-child-${index}`,
+        agent_type: "worker",
+        transcript_path: `/transcripts/child-${index}.jsonl`,
+        cwd: "/repo/app"
+      },
+      "resume"
+    )));
+
+    const state = JSON.parse(await readFile(paths.statePath, "utf8"));
+    assert.equal(state.agent_lanes.length, 12);
+    assert.equal(new Set(state.agent_lanes.map((lane) => lane.agent_id)).size, 12);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("context epochs advance independently for the root and each child agent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-agent-epochs-"));
+
+  try {
+    const env = { PLUGIN_DATA: root };
+    const config = resolveConfig(env);
+    const rootInput = {
+      session_id: "shared-session",
+      transcript_path: "/transcripts/root.jsonl",
+      cwd: "/repo/app"
+    };
+    const paths = resolveProjectPaths(rootInput, config, env);
+    await loadOrCreateThreadState(paths, rootInput, "startup");
+    await loadOrCreateThreadState(paths, {
+      ...rootInput,
+      agent_id: "agent-child-1",
+      agent_type: "worker",
+      transcript_path: "/transcripts/child-1.jsonl"
+    }, "resume");
+
+    const afterChildCompact = await advanceContextEpochForInput(paths, {
+      agent_id: "agent-child-1",
+      agent_type: "worker",
+      transcript_path: "/transcripts/child-1.jsonl"
+    });
+    assert.equal(afterChildCompact.context_epoch, 1);
+    assert.equal(afterChildCompact.agent_lanes[0].context_epoch, 2);
+
+    const afterRootCompact = await advanceContextEpochForInput(paths, rootInput);
+    assert.equal(afterRootCompact.context_epoch, 2);
+    assert.equal(afterRootCompact.agent_lanes[0].context_epoch, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("handoff metadata updates preserve concurrently registered agent lanes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-state-merge-"));
+
+  try {
+    const env = { PLUGIN_DATA: root };
+    const config = resolveConfig(env);
+    const rootInput = {
+      session_id: "shared-session",
+      transcript_path: "/transcripts/root.jsonl",
+      cwd: "/repo/app"
+    };
+    const paths = resolveProjectPaths(rootInput, config, env);
+    const staleRootState = await loadOrCreateThreadState(paths, rootInput, "startup");
+    await loadOrCreateThreadState(paths, {
+      ...rootInput,
+      agent_id: "agent-child-1",
+      agent_type: "worker",
+      transcript_path: "/transcripts/child-1.jsonl"
+    }, "resume");
+
+    const merged = await mergeHandoffState(paths, {
+      ...staleRootState,
+      handoff: {
+        ...staleRootState.handoff,
+        freshness: "fresh",
+        last_event_seq: 9
+      }
+    });
+
+    assert.equal(merged.handoff.freshness, "fresh");
+    assert.equal(merged.handoff.last_event_seq, 9);
+    assert.equal(merged.agent_lanes.length, 1);
+    assert.equal(merged.agent_lanes[0].agent_id, "agent-child-1");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

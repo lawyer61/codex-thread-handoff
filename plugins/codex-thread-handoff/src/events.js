@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { appendJsonl } from "./json-store.js";
+import { appendJsonlGenerated } from "./json-store.js";
 import { redactSecrets } from "./redaction.js";
 
 function digest(value) {
@@ -26,12 +26,25 @@ async function nextSeq(eventsPath) {
 
 async function appendEvent(paths, event) {
   const eventsPath = paths.eventsPath || join(paths.threadDir, "events.jsonl");
-  const withSeq = {
+  return appendJsonlGenerated(eventsPath, async () => ({
     seq: await nextSeq(eventsPath),
     ...event
+  }));
+}
+
+function eventProvenance(input) {
+  return {
+    turn_id: input.turn_id || null,
+    agent_id: input.agent_id || null,
+    agent_type: input.agent_type || null,
+    transcript_path: input.agent_transcript_path || input.transcript_path || null
   };
-  await appendJsonl(eventsPath, withSeq);
-  return withSeq;
+}
+
+function contextEpochFor(state, input) {
+  if (!input.agent_id) return state.context_epoch;
+  const lanes = Array.isArray(state.agent_lanes) ? state.agent_lanes : [];
+  return lanes.find((lane) => lane.agent_id === input.agent_id)?.context_epoch || 1;
 }
 
 function redactedSummary(value, config) {
@@ -49,7 +62,8 @@ export async function recordUserPrompt(paths, state, input, config) {
     type: "user_prompt",
     timestamp: new Date().toISOString(),
     logical_thread_id: state.logical_thread_id,
-    context_epoch: state.context_epoch,
+    context_epoch: contextEpochFor(state, input),
+    ...eventProvenance(input),
     prompt_summary: redacted.text,
     privacy: {
       redacted: redacted.redacted,
@@ -66,8 +80,10 @@ export async function recordToolObservation(paths, state, input, config) {
     type: "tool_observation",
     timestamp: new Date().toISOString(),
     logical_thread_id: state.logical_thread_id,
-    context_epoch: state.context_epoch,
+    context_epoch: contextEpochFor(state, input),
+    ...eventProvenance(input),
     tool: input.tool_name || input.tool || "unknown",
+    tool_use_id: input.tool_use_id || null,
     tool_input_digest: digest(input.tool_input),
     tool_input_summary: summarize(input.tool_input),
     tool_response_digest: digest(response),
@@ -85,8 +101,40 @@ export async function recordCompactBoundary(paths, state, input) {
     type: "compact_boundary",
     timestamp: new Date().toISOString(),
     logical_thread_id: state.logical_thread_id,
-    context_epoch: state.context_epoch,
+    context_epoch: contextEpochFor(state, input),
+    ...eventProvenance(input),
     trigger: input.trigger || input.compaction_trigger || "unknown"
+  });
+}
+
+export async function recordSubagentStarted(paths, state, input) {
+  return appendEvent(paths, {
+    type: "subagent_started",
+    timestamp: new Date().toISOString(),
+    logical_thread_id: state.logical_thread_id,
+    context_epoch: contextEpochFor(state, input),
+    ...eventProvenance(input)
+  });
+}
+
+export async function recordSubagentCompleted(paths, state, input, config) {
+  const message = input.last_assistant_message || "";
+  const redacted = redactedSummary(message, config);
+
+  return appendEvent(paths, {
+    type: "subagent_completed",
+    timestamp: new Date().toISOString(),
+    logical_thread_id: state.logical_thread_id,
+    context_epoch: contextEpochFor(state, input),
+    ...eventProvenance(input),
+    parent_transcript_path: input.transcript_path || null,
+    agent_transcript_path: input.agent_transcript_path || null,
+    last_assistant_message_digest: digest(message),
+    last_assistant_message_summary: redacted.text,
+    privacy: {
+      redacted: redacted.redacted,
+      redaction_rules: redacted.rules
+    }
   });
 }
 

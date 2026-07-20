@@ -15,7 +15,7 @@ function sessionRecord(input, source) {
   return {
     session_id: sessionIdFromInput(input) || "unknown",
     source,
-    transcript_path: input.transcript_path || null,
+    transcript_path: input.agent_id ? null : input.transcript_path || null,
     started_at: new Date().toISOString()
   };
 }
@@ -30,10 +30,61 @@ function sessionIdFromInput(input) {
 function withSessionRecord(state, input, source) {
   const nextRecord = sessionRecord(input, source);
   const existing = state.codex_sessions || [];
-  if (existing.some((record) => record.session_id === nextRecord.session_id)) {
+  const index = existing.findIndex((record) => record.session_id === nextRecord.session_id);
+  if (index >= 0) {
+    if (input.agent_id || !input.transcript_path) return existing;
+    const current = existing[index];
+    if (current.transcript_path === input.transcript_path) return existing;
+    const next = [...existing];
+    next[index] = {
+      ...current,
+      source,
+      transcript_path: input.transcript_path
+    };
+    return next;
+  }
+  if (!nextRecord.session_id) {
     return existing;
   }
   return [...existing, nextRecord];
+}
+
+function withAgentLane(state, input, patch = {}) {
+  if (!input.agent_id) return state;
+
+  const now = new Date().toISOString();
+  const lanes = Array.isArray(state.agent_lanes) ? state.agent_lanes : [];
+  const index = lanes.findIndex((lane) => lane.agent_id === input.agent_id);
+  const existing = index >= 0 ? lanes[index] : null;
+  const activatesLane = input.hook_event_name !== "SubagentStop";
+  const transcriptPath = input.agent_transcript_path || input.transcript_path || existing?.transcript_path || null;
+  const parentTranscriptPath = input.agent_transcript_path
+    ? input.transcript_path || existing?.parent_transcript_path || null
+    : existing?.parent_transcript_path || null;
+  const lane = {
+    agent_id: String(input.agent_id),
+    agent_type: input.agent_type || existing?.agent_type || "unknown",
+    transcript_path: transcriptPath,
+    parent_transcript_path: parentTranscriptPath,
+    context_epoch: existing?.context_epoch || 1,
+    status: Object.hasOwn(patch, "status")
+      ? patch.status
+      : activatesLane ? "active" : existing?.status || "active",
+    started_at: existing?.started_at || now,
+    last_updated_at: now,
+    last_compacted_at: existing?.last_compacted_at || null,
+    completed_at: Object.hasOwn(patch, "completed_at")
+      ? patch.completed_at
+      : activatesLane ? null : existing?.completed_at || null,
+    ...patch
+  };
+  const nextLanes = [...lanes];
+  if (index >= 0) {
+    nextLanes[index] = lane;
+  } else {
+    nextLanes.push(lane);
+  }
+  return { ...state, agent_lanes: nextLanes };
 }
 
 async function readActiveThread(paths) {
@@ -173,12 +224,15 @@ async function resolveExistingThread(paths, input, source, sessionId) {
 async function writeSessionBinding(paths, sessionId, logicalThreadId, input, source, existing) {
   if (!sessionId) return;
   const now = new Date().toISOString();
+  const childHook = Boolean(input.agent_id);
   await writeJsonAtomic(paths.sessionBindingPathFor(sessionId), {
     schema_version: 1,
     session_id: sessionId,
     logical_thread_id: logicalThreadId,
-    transcript_path: input.transcript_path || existing?.transcript_path || null,
-    source,
+    transcript_path: childHook
+      ? existing?.transcript_path || null
+      : input.transcript_path || existing?.transcript_path || null,
+    source: childHook ? existing?.source || source : source,
     created_at: existing?.created_at || now,
     updated_at: now
   });
@@ -198,6 +252,7 @@ function createState(paths, logicalThreadId, input, source) {
     last_updated_at: now,
     last_compacted_at: null,
     codex_sessions: [sessionRecord(input, source)],
+    agent_lanes: [],
     handoff: {
       latest_path: "latest.md",
       inject_path: "latest.inject.md",
@@ -222,15 +277,20 @@ export async function loadOrCreateThreadState(paths, input = {}, source = "start
     attachThreadPaths(paths, logicalThreadId);
     await mkdir(paths.threadDir, { recursive: true, mode: 0o700 });
 
-    const state = existing?.state
-      ? {
-          ...existing.state,
-          last_updated_at: new Date().toISOString(),
-          codex_sessions: withSessionRecord(existing.state, input, source)
-        }
-      : createState(paths, logicalThreadId, input, source);
+    const state = await withLock(paths.stateMutationLockPath, async () => {
+      const current = await readState(paths, logicalThreadId) || existing?.state;
+      const baseState = current
+        ? {
+            ...current,
+            last_updated_at: new Date().toISOString(),
+            codex_sessions: withSessionRecord(current, input, source)
+          }
+        : createState(paths, logicalThreadId, input, source);
+      const next = withAgentLane(baseState, input);
+      await writeJsonAtomic(paths.statePath, next);
+      return next;
+    });
 
-    await writeJsonAtomic(paths.statePath, state);
     await writeSessionBinding(paths, sessionId, logicalThreadId, input, source, existing?.binding);
     if (createdThread || !(await readActiveThread(paths))) {
       await writeTextAtomic(paths.activeThreadPath, `${logicalThreadId}\n`);
@@ -248,8 +308,63 @@ export function advanceContextEpoch(state) {
   };
 }
 
+export function agentContextEpoch(state, input = {}) {
+  if (!input.agent_id) return state.context_epoch || 1;
+  const lanes = Array.isArray(state.agent_lanes) ? state.agent_lanes : [];
+  return lanes.find((lane) => lane.agent_id === input.agent_id)?.context_epoch || 1;
+}
+
+export async function updateThreadState(paths, updater) {
+  const lockPath = paths.stateMutationLockPath || `${paths.statePath}.mutation.lock`;
+  return withLock(lockPath, async () => {
+    const current = await readThreadState(paths);
+    const next = await updater(current);
+    await writeJsonAtomic(paths.statePath, next);
+    return next;
+  });
+}
+
+export async function advanceContextEpochForInput(paths, input = {}) {
+  return updateThreadState(paths, (current) => {
+    if (!input.agent_id) return advanceContextEpoch(current);
+
+    const now = new Date().toISOString();
+    const withLane = withAgentLane(current, input);
+    return {
+      ...withLane,
+      last_updated_at: now,
+      agent_lanes: withLane.agent_lanes.map((lane) => lane.agent_id === input.agent_id
+        ? {
+            ...lane,
+            context_epoch: (lane.context_epoch || 0) + 1,
+            last_compacted_at: now,
+            last_updated_at: now
+          }
+        : lane)
+    };
+  });
+}
+
+export async function mergeHandoffState(paths, state) {
+  return updateThreadState(paths, (current) => ({
+    ...current,
+    last_updated_at: state.last_updated_at || current.last_updated_at,
+    handoff: state.handoff || current.handoff
+  }));
+}
+
+export async function completeAgentLane(paths, input) {
+  const now = new Date().toISOString();
+  return updateThreadState(paths, (current) => withAgentLane(current, input, {
+    status: "completed",
+    completed_at: now,
+    last_updated_at: now
+  }));
+}
+
 export async function saveThreadState(paths, state) {
-  await writeJsonAtomic(paths.statePath, state);
+  const lockPath = paths.stateMutationLockPath || `${paths.statePath}.mutation.lock`;
+  await withLock(lockPath, () => writeJsonAtomic(paths.statePath, state));
 }
 
 export async function readThreadState(paths) {

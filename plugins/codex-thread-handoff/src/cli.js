@@ -4,6 +4,8 @@ import { resolveConfig } from "./config.js";
 import { runDoctor } from "./doctor.js";
 import {
   recordCompactBoundary,
+  recordSubagentCompleted,
+  recordSubagentStarted,
   recordToolObservation,
   recordUserPrompt
 } from "./events.js";
@@ -29,24 +31,27 @@ import { writeTextAtomic } from "./json-store.js";
 import { resolveProjectPaths } from "./paths.js";
 import { redactSecrets } from "./redaction.js";
 import {
-  advanceContextEpoch,
+  advanceContextEpochForInput,
+  completeAgentLane,
   loadOrCreateThreadState,
+  mergeHandoffState,
   readThreadState,
-  readThreadStateFor,
-  saveThreadState
+  readThreadStateFor
 } from "./thread-state.js";
 import {
   runExternalSummarizer,
   scheduleBackgroundSummarizer
 } from "./summarizer.js";
 
-const USAGE = "Usage: thread-handoff <session-start|user-prompt-submit|post-tool-use|stop|pre-compact|post-compact|summarize --trigger <stop|precompact>|doctor --json>\n";
+const USAGE = "Usage: thread-handoff <session-start|subagent-start|user-prompt-submit|post-tool-use|stop|subagent-stop|pre-compact|post-compact|summarize --trigger <stop|precompact>|doctor --json>\n";
 const NEW_TASK_PROMPT = /(new task|start over|from scratch|do not inherit|新任务|重新开始|从头|不要沿用|不要继承)/i;
 const HOOK_COMMANDS = new Set([
   "session-start",
+  "subagent-start",
   "user-prompt-submit",
   "post-tool-use",
   "stop",
+  "subagent-stop",
   "pre-compact",
   "post-compact",
   "summarize"
@@ -137,8 +142,7 @@ async function handleSessionStart(stdin, env) {
         if (!reconciled.validation.ok || !reconciled.fresh) {
           throw new Error("No fresh valid handoff brief exists");
         }
-        state = reconciled.state;
-        await saveThreadState(paths, state);
+        state = await mergeHandoffState(paths, reconciled.state);
         brief = renderInjectBrief(reconciled.latest, config);
         await writeTextAtomic(paths.injectPath, brief);
       } catch {
@@ -151,12 +155,32 @@ async function handleSessionStart(stdin, env) {
   return jsonHookOutput({});
 }
 
+async function handleSubagentStart(stdin, env) {
+  const { input, config, paths } = resolveRuntime(stdin, env, "resume");
+  if (config.mode === "off") return jsonHookOutput({});
+
+  const state = await loadOrCreateThreadState(paths, input, "resume");
+  await recordSubagentStarted(paths, state, input);
+
+  if (config.mode !== "observe" && config.injectOnSubagentStart) {
+    try {
+      return jsonHookOutput(additionalContextOutput("SubagentStart", await readInjectBrief(paths)));
+    } catch {
+      return jsonHookOutput({});
+    }
+  }
+
+  return jsonHookOutput({});
+}
+
 async function handleUserPromptSubmit(stdin, env) {
   const { input, config, paths } = resolveRuntime(stdin, env, "resume");
   if (config.mode === "off") return jsonHookOutput({});
 
   const prompt = input.prompt || input.user_prompt || "";
-  const source = !config.keepThreadOnClear && NEW_TASK_PROMPT.test(prompt) ? "clear" : "resume";
+  const source = !input.agent_id && !config.keepThreadOnClear && NEW_TASK_PROMPT.test(prompt)
+    ? "clear"
+    : "resume";
   const state = await loadOrCreateThreadState(paths, input, source);
   await recordUserPrompt(paths, state, input, config);
 
@@ -190,8 +214,7 @@ async function handleStop(stdin, env) {
 
   try {
     const reconciled = await reconcileHandoffFreshness(paths, state, config);
-    state = reconciled.state;
-    await saveThreadState(paths, state);
+    state = await mergeHandoffState(paths, reconciled.state);
     if (reconciled.fresh) {
       await writeTextAtomic(paths.injectPath, renderInjectBrief(reconciled.latest, config));
     }
@@ -206,6 +229,16 @@ async function handleStop(stdin, env) {
   return jsonHookOutput({});
 }
 
+async function handleSubagentStop(stdin, env) {
+  const { input, config, paths } = resolveRuntime(stdin, env, "resume");
+  if (config.mode === "off") return jsonHookOutput({});
+
+  await loadOrCreateThreadState(paths, input, "resume");
+  const state = await completeAgentLane(paths, input);
+  await recordSubagentCompleted(paths, state, input, config);
+  return jsonHookOutput({});
+}
+
 async function handlePreCompact(stdin, env) {
   const { input, config, paths } = resolveRuntime(stdin, env, "resume");
   if (config.mode === "off" || config.mode === "observe") {
@@ -213,6 +246,10 @@ async function handlePreCompact(stdin, env) {
   }
 
   let state = await loadOrCreateThreadState(paths, input, "resume");
+  if (input.agent_id) {
+    return jsonHookOutput({ continue: true });
+  }
+
   await runExternalSummarizer(paths, state, input, config, env, "precompact", {
     timeoutMs: config.precompactSummarizerTimeoutMs
   });
@@ -228,9 +265,8 @@ async function handlePreCompact(stdin, env) {
   const validation = validateHandoff(latest);
   if (validation.ok) {
     const reconciled = await reconcileHandoffFreshness(paths, state, config);
-    state = reconciled.state;
+    state = await mergeHandoffState(paths, reconciled.state);
     latest = reconciled.latest;
-    await saveThreadState(paths, state);
   }
 
   if (validation.ok) {
@@ -244,10 +280,11 @@ async function handlePostCompact(stdin, env) {
   const { input, config, paths } = resolveRuntime(stdin, env, "resume");
   if (config.mode === "off") return jsonHookOutput({});
 
-  const state = await loadOrCreateThreadState(paths, input, "resume");
-  const next = advanceContextEpoch(state);
-  await saveThreadState(paths, next);
+  await loadOrCreateThreadState(paths, input, "resume");
+  const next = await advanceContextEpochForInput(paths, input);
   await recordCompactBoundary(paths, next, input);
+
+  if (input.agent_id) return jsonHookOutput({});
 
   try {
     const latest = await readLatestHandoff(paths);
@@ -302,6 +339,10 @@ export async function runCli(argv, stdin, env) {
       return { code: 0, stdout: await handleSessionStart(stdin, env), stderr: "" };
     }
 
+    if (command === "subagent-start") {
+      return { code: 0, stdout: await handleSubagentStart(stdin, env), stderr: "" };
+    }
+
     if (command === "user-prompt-submit") {
       return { code: 0, stdout: await handleUserPromptSubmit(stdin, env), stderr: "" };
     }
@@ -312,6 +353,10 @@ export async function runCli(argv, stdin, env) {
 
     if (command === "stop") {
       return { code: 0, stdout: await handleStop(stdin, env), stderr: "" };
+    }
+
+    if (command === "subagent-stop") {
+      return { code: 0, stdout: await handleSubagentStop(stdin, env), stderr: "" };
     }
 
     if (command === "pre-compact") {

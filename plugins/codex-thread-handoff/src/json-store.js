@@ -4,9 +4,15 @@ import { dirname } from "node:path";
 import { withLock } from "./lock.js";
 
 export async function appendJsonl(path, value) {
+  return appendJsonlGenerated(path, () => value);
+}
+
+export async function appendJsonlGenerated(path, factory) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await withLock(`${path}.lock`, async () => {
+  return withLock(`${path}.lock`, async () => {
+    const value = await factory();
     await appendFile(path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+    return value;
   });
 }
 

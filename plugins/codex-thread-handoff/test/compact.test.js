@@ -148,6 +148,7 @@ test("PreCompact waits for the external summarizer and writes latest artifacts",
     });
 
     assert.equal(requestBody.model, "gpt-5.4");
+    assert.match(requestBody.messages[0].content, /subagent_completed/);
     assert.match(JSON.stringify(requestBody.messages), /finish the plugin/);
     assert.match(await readFile(join(threadDir, "latest.md"), "utf8"), /Summarized by external API/);
     assert.match(await readFile(join(threadDir, "latest.inject.md"), "utf8"), /THREAD_HANDOFF_MEMORY/);
@@ -291,6 +292,98 @@ test("PostCompact advances the context epoch and records a boundary", async () =
     const state = JSON.parse(await readFile(join(threadDir, "state.json"), "utf8"));
     assert.equal(state.context_epoch, 2);
     assert.match(await readFile(join(threadDir, "events.jsonl"), "utf8"), /compact_boundary/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a child PreCompact does not call the shared external summarizer", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-child-precompact-"));
+  let requestCount = 0;
+
+  try {
+    const threadDir = await seed(root, "stale");
+    await withServer((request, response) => {
+      requestCount += 1;
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                latest_md: renderInitialHandoff({
+                  logical_thread_id: "lt_test",
+                  context_epoch: 1
+                }, {
+                  project: "example",
+                  repo_root: "/repo"
+                }),
+                confidence: "high",
+                source_event_seq: 0,
+                warnings: []
+              })
+            }
+          }]
+        }));
+      });
+    }, async (baseUrl) => {
+      const result = await runCli(["pre-compact"], JSON.stringify({
+        cwd: "/repo",
+        project_hash_override: "preseed",
+        session_id: "shared-session",
+        turn_id: "turn-child-1",
+        agent_id: "agent-child-1",
+        agent_type: "worker",
+        transcript_path: "/transcripts/child-1.jsonl",
+        trigger: "auto"
+      }), {
+        PLUGIN_DATA: root,
+        THREAD_HANDOFF_MODE: "strict",
+        THREAD_HANDOFF_SUMMARIZER_BASE_URL: baseUrl,
+        OPENAI_API_KEY: "test-key"
+      });
+
+      assert.deepEqual(JSON.parse(result.stdout), { continue: true });
+    });
+
+    assert.equal(requestCount, 0);
+    const events = await readFile(join(threadDir, "events.jsonl"), "utf8").catch(() => "");
+    assert.doesNotMatch(events, /summary_job_/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a child PostCompact advances only the child execution lane epoch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "thread-handoff-child-postcompact-"));
+
+  try {
+    const threadDir = await seed(root);
+    const result = await runCli(["post-compact"], JSON.stringify({
+      cwd: "/repo",
+      project_hash_override: "preseed",
+      session_id: "shared-session",
+      turn_id: "turn-child-1",
+      agent_id: "agent-child-1",
+      agent_type: "worker",
+      transcript_path: "/transcripts/child-1.jsonl",
+      trigger: "auto"
+    }), { PLUGIN_DATA: root });
+
+    assert.equal(result.code, 0);
+    const state = JSON.parse(await readFile(join(threadDir, "state.json"), "utf8"));
+    assert.equal(state.context_epoch, 1);
+    assert.equal(state.agent_lanes.length, 1);
+    assert.equal(state.agent_lanes[0].context_epoch, 2);
+
+    const events = (await readFile(join(threadDir, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    assert.equal(events[0].type, "compact_boundary");
+    assert.equal(events[0].agent_id, "agent-child-1");
+    assert.equal(events[0].context_epoch, 2);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
